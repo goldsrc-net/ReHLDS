@@ -1,4 +1,5 @@
 **/build
+**/build-amd64
 **/build-arm64
 *.iml
 *.bat

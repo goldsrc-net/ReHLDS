@@ -5,7 +5,10 @@
 #include "osconfig.h"
 
 #include "archtypes.h"
-#if !defined(__aarch64__) && !defined(_M_ARM64)
+// asmlib (Agner Fog) is shipped only as 32-bit libaelf32.a; the linker would
+// fail to resolve A_memset/A_strcpy/etc. on amd64/aarch64. strtools.h falls
+// through to libc when ASMLIB_H is undefined.
+#if defined(__i386__)
 	#include "asmlib.h"
 #endif
 #include "sse_mathfun.h"

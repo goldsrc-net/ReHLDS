@@ -24,4 +24,5 @@ include_directories(
 add_library(bzip2 STATIC ${BZIP2_SRCS})
 set_target_properties(bzip2 PROPERTIES
 	COMPILE_FLAGS "${ARCH_BITNESS_FLAG}"
+	POSITION_INDEPENDENT_CODE ${ARCH_PIC}
 )

@@ -143,11 +143,7 @@ if (NOT TARGET bzip2)
 	add_subdirectory(../../../dep/bzip2 lib)
 endif()
 
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/../../lib/linuxarm64)
-else()
-	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/../../lib/linux32)
-endif()
+set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/../../lib/${ARCH_LIB_DIR})
 
 set(LINK_FLAGS "${LINK_FLAGS} \
 	-Wl,-rpath,'$ORIGIN/.' \

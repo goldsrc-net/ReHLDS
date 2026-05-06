@@ -52,10 +52,11 @@
 // For EBP based stack (older gcc) (uncomment version apropriate for your compiler)
 //#define NOXREFCHECK			int __retAddr; __asm__ __volatile__("movl 4(%%ebp), %%eax;" "movl %%eax, %0":"=r"(__retAddr)::"%eax"); Sys_Error("[NOXREFCHECK]: %s: (" __FILE__ ":" __LINE__AS_STRING ") NOXREF, but called from 0x%.08x", __func__, __retAddr);
 // For ESP based stack (newer gcc) (uncomment version apropriate for your compiler)
-#if defined(__i386__) || defined(__x86_64__)
+#if defined(__i386__)
 #define NOXREFCHECK			int __retAddr; __asm__ __volatile__("movl 16(%%esp), %%eax;" "movl %%eax, %0":"=r"(__retAddr)::"%eax"); Sys_Error("[NOXREFCHECK]: %s: (" __FILE__ ":" __LINE__AS_STRING ") NOXREF, but called from 0x%.08x", __func__, __retAddr);
 #else
-// Non-x86 platforms (e.g. arm64): no inline asm equivalent for return-address probe; treat as no-op.
+// 32-bit x86 only — the asm reads %esp, which doesn't exist in 64-bit mode (it's %rsp there).
+// On amd64 / aarch64 we'd need a different probe; treat as a no-op.
 #define NOXREFCHECK
 #endif
 #endif

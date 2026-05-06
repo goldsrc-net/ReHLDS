@@ -269,9 +269,11 @@ target_compile_definitions(engine PRIVATE
 	REHLDS_UNIT_TESTS REHLDS_SSE>
 )
 
-# REHLDS_JIT is x86-only (delta_jit.cpp emits raw x86 machine code via jitasm.h).
-# On aarch64 the engine falls through to the non-JIT codepaths in delta.cpp.
-if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))
+# REHLDS_JIT is x86-32-only — jitasm.h emits raw 32-bit x86 machine code at
+# runtime. On amd64/aarch64 the engine falls through to the non-JIT codepaths
+# in delta.cpp. (A future commit replaces jitasm with AsmJit, which has
+# multi-arch backends and lets us re-enable this everywhere.)
+if (ARCH_IS_X86_32)
 	target_compile_definitions(engine PRIVATE REHLDS_JIT)
 	target_compile_definitions(engine PRIVATE $<$<CONFIG:Unittests>:REHLDS_JIT>)
 endif()
@@ -291,9 +293,10 @@ target_link_libraries(engine PRIVATE
 	bzip2
 	steam_api
 )
-# asmlib (Agner Fog's hand-tuned x86 asm string lib) only has 32-bit x86 builds.
-# Skip on non-x86 architectures; strtools.h falls through to libc when ASMLIB_H is undefined.
-if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))
+# asmlib (Agner Fog's hand-tuned x86 asm string lib) is shipped here only as
+# libaelf32.a. Skip on amd64/aarch64; strtools.h falls through to libc when
+# ASMLIB_H is undefined.
+if (ARCH_IS_X86_32)
 	target_link_libraries(engine PRIVATE aelf32)
 endif()
 
@@ -302,11 +305,7 @@ if (USE_STATIC_LIBSTDC)
 	set(LINK_FLAGS "${LINK_FLAGS} -static-libgcc -static-libstdc++")
 endif()
 
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/lib/linuxarm64)
-else()
-	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/lib/linux32)
-endif()
+set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/lib/${ARCH_LIB_DIR})
 
 set(LINK_FLAGS "${LINK_FLAGS} \
 	-Wl,-rpath,'$ORIGIN/.' \
