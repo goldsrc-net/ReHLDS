@@ -27,7 +27,7 @@
 */
 #include "sys_shared.h"
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__))
 #include <cpuid.h>
 #elif _MSC_VER >= 1400 && !defined(ASMLIB_H)
 #include <intrin.h>	// __cpuidex
@@ -45,6 +45,7 @@ cpuinfo_t cpuinfo;
 
 void Sys_CheckCpuInstructionsSupport(void)
 {
+#if defined(__i386__) || defined(__x86_64__) || defined(_M_IX86) || defined(_M_X64)
 	unsigned int cpuid_data[4];
 
 #if defined ASMLIB_H
@@ -71,4 +72,9 @@ void Sys_CheckCpuInstructionsSupport(void)
 #endif
 
 	cpuinfo.avx2 = (cpuid_data[1] & AVX2_FLAG) ? 1 : 0; // ebx
+#else
+	// Non-x86 (e.g. aarch64): no CPUID. cpuinfo is zero-initialised; SSE/AVX-gated
+	// fast paths fall through to scalar code (sse2neon emulates SSE intrinsics if used).
+	(void)cpuinfo;
+#endif
 }

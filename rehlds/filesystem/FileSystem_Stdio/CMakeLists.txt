@@ -9,8 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Avoid -fPIC option
 set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
 
-set(COMPILE_FLAGS "-m32 -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
-set(LINK_FLAGS "-m32")
+set(COMPILE_FLAGS "${ARCH_BITNESS_FLAG} -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
+set(LINK_FLAGS "${ARCH_BITNESS_FLAG}")
 
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-exceptions -fno-strict-aliasing -fno-strict-overflow")
 
@@ -28,7 +28,7 @@ else()
 	# Produce code optimized for the most common IA32/AMD64/EM64T processors.
 	# As new processors are deployed in the marketplace, the behavior of this option will change.
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} \
-		-mtune=generic -msse3\
+		-mtune=generic ${ARCH_SSE_FLAG}\
 		-fpermissive -fno-sized-deallocation\
 		-Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-result -Wno-unused-function\
 		-Wno-write-strings -Wno-sign-compare -Wno-strict-aliasing")
@@ -102,7 +102,7 @@ target_link_libraries(filesystem_stdio PRIVATE
 set_target_properties(filesystem_stdio PROPERTIES
 	OUTPUT_NAME filesystem_stdio
 	PREFIX ""
-	COMPILE_FLAGS ${COMPILE_FLAGS}
-	LINK_FLAGS ${LINK_FLAGS}
-	POSITION_INDEPENDENT_CODE OFF
+	COMPILE_FLAGS "${COMPILE_FLAGS}"
+	LINK_FLAGS "${LINK_FLAGS}"
+	POSITION_INDEPENDENT_CODE ${ARCH_PIC}
 )

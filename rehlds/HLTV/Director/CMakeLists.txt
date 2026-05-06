@@ -9,8 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Avoid -fPIC option
 set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
 
-set(COMPILE_FLAGS "-m32 -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
-set(LINK_FLAGS "-m32")
+set(COMPILE_FLAGS "${ARCH_BITNESS_FLAG} -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
+set(LINK_FLAGS "${ARCH_BITNESS_FLAG}")
 
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-exceptions -fno-strict-aliasing -fno-strict-overflow")
 
@@ -33,7 +33,7 @@ else()
 	# Produce code optimized for the most common IA32/AMD64/EM64T processors.
 	# As new processors are deployed in the marketplace, the behavior of this option will change.
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} \
-		-mtune=generic -msse3 -flto\
+		-mtune=generic ${ARCH_SSE_FLAG} -flto\
 		-fpermissive -fno-sized-deallocation\
 		-Wno-unused-result -Wno-unknown-pragmas\
 		-Wno-write-strings -Wno-strict-aliasing")
@@ -107,14 +107,20 @@ target_link_libraries(director PRIVATE
 	m
 )
 
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/../../lib/linuxarm64)
+else()
+	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/../../lib/linux32)
+endif()
+
 set(LINK_FLAGS "${LINK_FLAGS} \
 	-Wl,-rpath,'$ORIGIN/.' \
-	-L${PROJECT_SOURCE_DIR}/../../lib/linux32")
+	-L${REHLDS_LIB_DIR}")
 
 set_target_properties(director PROPERTIES
 	OUTPUT_NAME director
 	PREFIX ""
-	COMPILE_FLAGS ${COMPILE_FLAGS}
-	LINK_FLAGS ${LINK_FLAGS}
-	POSITION_INDEPENDENT_CODE OFF
+	COMPILE_FLAGS "${COMPILE_FLAGS}"
+	LINK_FLAGS "${LINK_FLAGS}"
+	POSITION_INDEPENDENT_CODE ${ARCH_PIC}
 )

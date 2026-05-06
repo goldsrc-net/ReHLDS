@@ -14,7 +14,11 @@ along with this program; if not, see <http://www.gnu.org/licenses/>.
 
 #include "crc32c.h"
 #include "sys_shared.h"
-#include "immintrin.h"
+#if defined(__aarch64__) || defined(_M_ARM64)
+	#include "sse2neon.h"
+#else
+	#include "immintrin.h"
+#endif
 
 /*****************************************************************/
 /*                                                               */

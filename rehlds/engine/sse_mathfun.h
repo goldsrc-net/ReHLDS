@@ -30,7 +30,11 @@ misrepresented as being the original software.
 */
 #pragma once
 
+#if defined(__aarch64__) || defined(_M_ARM64)
+#include "sse2neon.h"
+#else
 #include <xmmintrin.h>
+#endif
 
 /* yes I know, the top of this file is quite ugly */
 
@@ -45,7 +49,9 @@ misrepresented as being the original software.
 /* __m128 is ugly to write */
 typedef __m128 v4sf;  // vector of 4 float (sse1)
 
+#if !defined(__aarch64__) && !defined(_M_ARM64)
 #include <emmintrin.h>
+#endif
 typedef __m128i v4si; // vector of 4 int (sse2)
 
 

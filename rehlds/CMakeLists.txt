@@ -20,6 +20,8 @@
 cmake_minimum_required(VERSION 3.1)
 project(engine CXX)
 
+include(${CMAKE_CURRENT_LIST_DIR}/../cmake/ArchFlags.cmake)
+
 option(DEBUG "Build with debug information." OFF)
 option(USE_STATIC_LIBSTDC "Enables static linking libstdc++." OFF)
 
@@ -30,8 +32,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_SHARED_LIBRARY_CXX_FLAGS "")
 set(CMAKE_SHARED_LIBRARY_LINK_CXX_FLAGS "")
 
-set(COMPILE_FLAGS "-m32 -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
-set(LINK_FLAGS "-m32")
+set(COMPILE_FLAGS "${ARCH_BITNESS_FLAG} -U_FORTIFY_SOURCE -DFORTIFY_SOURCE=0")
+set(LINK_FLAGS "${ARCH_BITNESS_FLAG}")
 
 set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wall -fno-rtti -fno-exceptions -fno-strict-aliasing -fno-strict-overflow")
 
@@ -64,7 +66,7 @@ else()
 	# Produce code optimized for the most common IA32/AMD64/EM64T processors.
 	# As new processors are deployed in the marketplace, the behavior of this option will change.
 	set(COMPILE_FLAGS "${COMPILE_FLAGS} \
-		-mtune=generic -msse3\
+		-mtune=generic ${ARCH_SSE_FLAG}\
 		-fpermissive -fno-sized-deallocation\
 		-Wno-unknown-pragmas -Wno-invalid-offsetof\
 		-Wno-unused-variable -Wno-unused-result -Wno-unused-function -Wno-delete-non-virtual-dtor\
@@ -244,7 +246,7 @@ target_include_directories(engine PRIVATE
 
 target_compile_definitions(engine PRIVATE
 	SWDS
-	REHLDS_JIT
+	# REHLDS_JIT generates x86 machine code at runtime; defined per-arch below.
 	REHLDS_SSE
 	REHLDS_FIXES
 	REHLDS_CHECKS
@@ -264,8 +266,15 @@ target_compile_definitions(engine PRIVATE
 	_vsnwprintf=vswprintf
 
 	$<$<CONFIG:Unittests>:
-	REHLDS_UNIT_TESTS REHLDS_SSE REHLDS_JIT>
+	REHLDS_UNIT_TESTS REHLDS_SSE>
 )
+
+# REHLDS_JIT is x86-only (delta_jit.cpp emits raw x86 machine code via jitasm.h).
+# On aarch64 the engine falls through to the non-JIT codepaths in delta.cpp.
+if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))
+	target_compile_definitions(engine PRIVATE REHLDS_JIT)
+	target_compile_definitions(engine PRIVATE $<$<CONFIG:Unittests>:REHLDS_JIT>)
+endif()
 
 target_sources(engine PRIVATE
 	${COMMON_SRCS}
@@ -279,24 +288,34 @@ target_link_libraries(engine PRIVATE
 	dl
 	rt
 	m
-	aelf32
 	bzip2
 	steam_api
 )
+# asmlib (Agner Fog's hand-tuned x86 asm string lib) only has 32-bit x86 builds.
+# Skip on non-x86 architectures; strtools.h falls through to libc when ASMLIB_H is undefined.
+if (NOT (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64"))
+	target_link_libraries(engine PRIVATE aelf32)
+endif()
 
 if (USE_STATIC_LIBSTDC)
 	target_compile_definitions(engine PRIVATE BUILD_STATIC_LIBSTDC)
 	set(LINK_FLAGS "${LINK_FLAGS} -static-libgcc -static-libstdc++")
 endif()
 
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/lib/linuxarm64)
+else()
+	set(REHLDS_LIB_DIR ${PROJECT_SOURCE_DIR}/lib/linux32)
+endif()
+
 set(LINK_FLAGS "${LINK_FLAGS} \
 	-Wl,-rpath,'$ORIGIN/.' \
-	-L${PROJECT_SOURCE_DIR}/lib/linux32")
+	-L${REHLDS_LIB_DIR}")
 
 set_target_properties(engine PROPERTIES
 	OUTPUT_NAME engine_i486
 	PREFIX ""
-	COMPILE_FLAGS ${COMPILE_FLAGS}
-	LINK_FLAGS ${LINK_FLAGS}
-	POSITION_INDEPENDENT_CODE OFF
+	COMPILE_FLAGS "${COMPILE_FLAGS}"
+	LINK_FLAGS "${LINK_FLAGS}"
+	POSITION_INDEPENDENT_CODE ${ARCH_PIC}
 )

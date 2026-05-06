@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.1)
 project(cppunitlite CXX)
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/ArchFlags.cmake)
+
 add_library(cppunitlite STATIC)
 
 target_sources(cppunitlite PRIVATE
@@ -21,5 +23,5 @@ target_compile_definitions(cppunitlite PRIVATE
 )
 
 target_compile_options(cppunitlite PRIVATE
-	-m32
+	${ARCH_BITNESS_FLAG}
 )

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.1)
 project(rehlds CXX)
 
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/ArchFlags.cmake)
+
 if (WIN32)
 	message(FATAL_ERROR "CMakeLists.txt Windows platform isn't supported yet. Use msvc/ReHLDS.sln instead it!")
 endif()

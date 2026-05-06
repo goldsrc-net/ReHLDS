@@ -88,8 +88,14 @@
 #include <fstream>
 #include <iomanip>
 
-#include <smmintrin.h>
-#include <xmmintrin.h>
+#if defined(__aarch64__) || defined(_M_ARM64)
+	#include "sse2neon.h"
+	// sse2neon exports _rdtsc (MSVC-style). GCC code uses the __rdtsc spelling.
+	#define __rdtsc _rdtsc
+#else
+	#include <smmintrin.h>
+	#include <xmmintrin.h>
+#endif
 
 
 #ifdef _WIN32 // WINDOWS
@@ -136,7 +142,9 @@
 		VirtualFree(ptr, 0, MEM_RELEASE);
 	}
 #else // _WIN32
-	#include <x86intrin.h>
+	#if !defined(__aarch64__)
+		#include <x86intrin.h>
+	#endif
 
 	#ifndef PAGESIZE
 		#define PAGESIZE 4096
@@ -169,6 +177,10 @@
 	#define __builtin_bswap16 _bswap16
 	#define __builtin_bswap32 _bswap
 	#define __builtin_bswap64 _bswap64
+#elif defined(__aarch64__) || defined(_M_ARM64)
+	// gcc on aarch64 doesn't accept x86 target attrs (sse4.1, ssse3, etc.).
+	// SSE-tagged inlines fall through to plain code; sse2neon emulates intrinsics.
+	#define FUNC_TARGET(x)
 #else
 	#define FUNC_TARGET(x) __attribute__((target(x)))
 #endif // __INTEL_COMPILER

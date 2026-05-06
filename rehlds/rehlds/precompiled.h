@@ -5,7 +5,9 @@
 #include "osconfig.h"
 
 #include "archtypes.h"
-#include "asmlib.h"
+#if !defined(__aarch64__) && !defined(_M_ARM64)
+	#include "asmlib.h"
+#endif
 #include "sse_mathfun.h"
 #include "mathlib.h"
 

@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.1)
 project(bzip2 C)
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../cmake/ArchFlags.cmake)
+
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -g0 -O1 -fno-stack-protector -fno-strict-aliasing -fno-strict-overflow")
 
 set(BZIP2_SRCS
@@ -21,5 +23,5 @@ include_directories(
 
 add_library(bzip2 STATIC ${BZIP2_SRCS})
 set_target_properties(bzip2 PROPERTIES
-	COMPILE_FLAGS "-m32"
+	COMPILE_FLAGS "${ARCH_BITNESS_FLAG}"
 )
