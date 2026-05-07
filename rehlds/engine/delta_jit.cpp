@@ -118,12 +118,62 @@ void DELTAJIT_CreateDescription(delta_t* delta, deltajitdata_t &jitdesc) {
 
 	for (int i = 0; i < delta->fieldCount; i++) {
 		delta_description_t* fieldDesc = &delta->pdd[i];
+		unsigned int blockId    = fieldDesc->fieldOffset / 16;
+		unsigned int blockStart = blockId * 16;
+		unsigned int fieldSize  = DELTAJIT_GetFieldSize(fieldDesc);
+
 		auto jitField = &jitdesc.fields[i];
 		jitField->id = i;
 		jitField->offset = fieldDesc->fieldOffset;
 		jitField->type = fieldDesc->fieldType;
-		jitField->length = DELTAJIT_GetFieldSize(fieldDesc);
+		jitField->length = fieldSize;
 		jitField->significantBits = fieldDesc->significant_bits;
+
+		// Walk every 16-byte block this field touches and record a per-byte
+		// mask of which bytes within that block belong to this field. The
+		// SSE/NEON block fast-path uses these masks to test "did any byte of
+		// this field differ" with a single tst against the block's diff mask.
+		if ((fieldDesc->fieldType & ~DT_SIGNED) != DT_STRING) {
+			bool firstBlock = true;
+			deltajit_memblock_field* blockField = nullptr;
+			while (blockStart < fieldDesc->fieldOffset + fieldSize) {
+				deltajit_memblock* memblock = &jitdesc.blocks[blockId];
+				uint32 mask = DELTAJIT_CreateMask(
+					fieldDesc->fieldOffset - blockStart,
+					fieldDesc->fieldOffset + fieldSize - blockStart);
+				blockField = &memblock->fields[memblock->numFields++];
+				blockField->field = jitField;
+				jitField->numBlocks++;
+				blockField->first = firstBlock;
+				blockField->mask  = (uint16)mask;
+
+				blockStart += 16;
+				blockId++;
+				firstBlock = false;
+			}
+			if (blockField) {
+				blockField->last = true;
+			}
+		}
+	}
+
+	// Iteration order: only blocks that contain at least one tracked field.
+	for (unsigned int i = 0; i < jitdesc.numblocks; i++) {
+		if (jitdesc.blocks[i].numFields > 0) {
+			auto* itr = &jitdesc.itrBlocks[jitdesc.numItrBlocks++];
+			itr->memblockId      = (int)i;
+			itr->memblock        = &jitdesc.blocks[i];
+			itr->prefetchBlockId = -1;
+		}
+	}
+
+	// Schedule a prefetch 4 iteration-blocks ahead. Stops when it would walk
+	// off the end. Hides L1 misses on the next-but-three block.
+	for (unsigned int i = 0; i < jitdesc.numItrBlocks; i++) {
+		unsigned int prefetchBlkId = (i + 1) * 4;
+		if (prefetchBlkId >= jitdesc.numblocks)
+			break;
+		jitdesc.itrBlocks[i].prefetchBlockId = (int)prefetchBlkId;
 	}
 }
 
@@ -167,69 +217,38 @@ extern "C" int rehlds_jit_strlen(const char* s) {
 }
 
 // =========================================================================
-// x86 / x86_64 backend
+// x86 / x86_64 backend (SSE2 block fast-path)
+//
+// Mirrors the original jitasm-based codegen: process 16 bytes per pcmpeqb,
+// extract a 16-bit "differs" mask via pmovmskb, and resolve each tracked
+// field with a single test against its byte-mask within the block. Prefetch
+// runs 4 blocks ahead. SSE2 is mandatory on x86_64 and on every x86 CPU
+// since ~2003, so we don't gate at runtime.
 // =========================================================================
 #if REHLDS_JIT_BACKEND_X86
 
 namespace asmx = asmjit::x86;
 
-// Emit a per-field "is this field changed?" check. Sets the `changed` GP
-// register to 0 (unchanged) or 1 (changed).
-static void x86_emit_field_changed(asmjit::x86::Compiler &cc,
+// Emit the SSE2 block compare for one 16-byte memblock. After this, blockMask
+// holds a 16-bit bitmap where bit i = 1 iff byte i within the block differs
+// between src and dst. itrIdx is used to select an unrolled prefetch target.
+static void x86_emit_block_compare(asmjit::x86::Compiler &cc,
 	const asmx::Gp &src, const asmx::Gp &dst,
-	deltajit_field *field, const asmx::Gp &changed)
+	const deltajit_memblock_itr_t *itr, const asmx::Gp &blockMask)
 {
-	int type = field->type & ~DT_SIGNED;
-	int off = field->offset;
-	asmjit::Label different = cc.new_label();
-	asmjit::Label done = cc.new_label();
-
-	switch (type) {
-	case DT_BYTE: {
-		asmx::Gp a = cc.new_gp8();
-		asmx::Gp b = cc.new_gp8();
-		cc.mov(a, asmx::byte_ptr(src, off));
-		cc.mov(b, asmx::byte_ptr(dst, off));
-		cc.cmp(a, b);
-		cc.jne(different);
-		break;
+	int blockOff = itr->memblockId * 16;
+	if (itr->prefetchBlockId != -1) {
+		int prefetchOff = itr->prefetchBlockId * 16;
+		cc.prefetcht0(asmx::byte_ptr(src, prefetchOff));
+		cc.prefetcht0(asmx::byte_ptr(dst, prefetchOff));
 	}
-	case DT_SHORT: {
-		asmx::Gp a = cc.new_gp16();
-		asmx::Gp b = cc.new_gp16();
-		cc.mov(a, asmx::word_ptr(src, off));
-		cc.mov(b, asmx::word_ptr(dst, off));
-		cc.cmp(a, b);
-		cc.jne(different);
-		break;
-	}
-	case DT_FLOAT:
-	case DT_INTEGER:
-	case DT_ANGLE:
-	case DT_TIMEWINDOW_8:
-	case DT_TIMEWINDOW_BIG: {
-		asmx::Gp a = cc.new_gp32();
-		asmx::Gp b = cc.new_gp32();
-		cc.mov(a, asmx::dword_ptr(src, off));
-		cc.mov(b, asmx::dword_ptr(dst, off));
-		cc.cmp(a, b);
-		cc.jne(different);
-		break;
-	}
-	default:
-		// strings handled separately; anything else falls through as unchanged
-		cc.mov(changed, 0);
-		cc.jmp(done);
-		cc.bind(different);
-		cc.bind(done);
-		return;
-	}
-
-	cc.mov(changed, 0);
-	cc.jmp(done);
-	cc.bind(different);
-	cc.mov(changed, 1);
-	cc.bind(done);
+	asmx::Vec src_xmm = cc.new_vec128();
+	asmx::Vec dst_xmm = cc.new_vec128();
+	cc.movdqu(src_xmm, asmx::xmmword_ptr(src, blockOff));
+	cc.movdqu(dst_xmm, asmx::xmmword_ptr(dst, blockOff));
+	cc.pcmpeqb(src_xmm, dst_xmm);          // 0xFF where bytes equal
+	cc.pmovmskb(blockMask, src_xmm);        // low 16 bits: equality bitmap
+	cc.not_(blockMask);                     // flip: 1 where bytes differ
 }
 
 static int (*x86_emit_test_delta(deltajitdata_t *jd))(void*, void*, void*)
@@ -251,18 +270,42 @@ static int (*x86_emit_test_delta(deltajitdata_t *jd))(void*, void*, void*)
 	cc.xor_(neededBits, neededBits);
 	cc.mov(highestBit, -1);
 
-	// Non-string fields
+	// Phase 1: SSE2 block iteration builds a 64-bit "field changed" mask in
+	// (markedLo, markedHi). Idempotent OR handles fields that span 16-byte
+	// boundaries — if ANY of a field's blocks shows a byte diff, its bit is
+	// set in the mask. Phase 2 below iterates fields once over the mask.
+	asmx::Gp markedLo = cc.new_gp32("markedLo");
+	asmx::Gp markedHi = cc.new_gp32("markedHi");
+	cc.xor_(markedLo, markedLo);
+	cc.xor_(markedHi, markedHi);
+
+	for (unsigned i = 0; i < jd->numItrBlocks; i++) {
+		auto *itr = &jd->itrBlocks[i];
+		auto *block = itr->memblock;
+		asmx::Gp blockMask = cc.new_gp32();
+		x86_emit_block_compare(cc, src, dst, itr, blockMask);
+
+		for (unsigned j = 0; j < block->numFields; j++) {
+			auto *bf = &block->fields[j];
+			deltajit_field *field = bf->field;
+			asmjit::Label skip = cc.new_label();
+			cc.test(blockMask, (uint32_t)bf->mask);
+			cc.jz(skip);
+			uint32 bit = 1u << (field->id & 31);
+			if (field->id < 32) cc.or_(markedLo, bit);
+			else                cc.or_(markedHi, bit);
+			cc.bind(skip);
+		}
+	}
+
+	// Phase 2: score each non-string field once against the union mask.
 	for (unsigned i = 0; i < jd->numFields; i++) {
 		deltajit_field *field = &jd->fields[i];
 		if ((field->type & ~DT_SIGNED) == DT_STRING) continue;
 
-		asmx::Gp changed = cc.new_gp32();
-		x86_emit_field_changed(cc, src, dst, field, changed);
-
-		// if changed: highestBit = max(highestBit, field->id);
-		//             neededBits += field->significantBits
+		uint32 bit = 1u << (field->id & 31);
 		asmjit::Label not_changed = cc.new_label();
-		cc.test(changed, changed);
+		cc.test(field->id < 32 ? markedLo : markedHi, bit);
 		cc.jz(not_changed);
 
 		asmx::Gp idImm = cc.new_gp32();
@@ -369,27 +412,28 @@ static int (*x86_emit_clear_mark_check(deltajitdata_t *jd))(void*, void*, void*,
 	cc.xor_(markedLo, markedLo);
 	cc.xor_(markedHi, markedHi);
 
-	// Non-string fields
-	for (unsigned i = 0; i < jd->numFields; i++) {
-		deltajit_field *field = &jd->fields[i];
-		if ((field->type & ~DT_SIGNED) == DT_STRING) continue;
+	// SSE2 block iteration: for each 16-byte memblock, pcmpeqb+pmovmskb to
+	// get a 16-bit "differs" map, then OR the matching bit into the marked
+	// mask for every field whose bytes overlap the differing region. OR is
+	// idempotent so multi-block fields land in the right place even when
+	// only some of their bytes differ.
+	for (unsigned i = 0; i < jd->numItrBlocks; i++) {
+		auto *itr = &jd->itrBlocks[i];
+		auto *block = itr->memblock;
+		asmx::Gp blockMask = cc.new_gp32();
+		x86_emit_block_compare(cc, src, dst, itr, blockMask);
 
-		asmx::Gp changed = cc.new_gp32();
-		x86_emit_field_changed(cc, src, dst, field, changed);
-
-		// markedMask |= (changed << field->id)
-		// Implemented as: if (changed) markedXX |= (1 << (id & 31))
-		asmjit::Label not_changed = cc.new_label();
-		cc.test(changed, changed);
-		cc.jz(not_changed);
-
-		uint32 bit = 1u << (field->id & 31);
-		if (field->id < 32)
-			cc.or_(markedLo, bit);
-		else
-			cc.or_(markedHi, bit);
-
-		cc.bind(not_changed);
+		for (unsigned j = 0; j < block->numFields; j++) {
+			auto *bf = &block->fields[j];
+			deltajit_field *field = bf->field;
+			asmjit::Label skip = cc.new_label();
+			cc.test(blockMask, (uint32_t)bf->mask);
+			cc.jz(skip);
+			uint32 bit = 1u << (field->id & 31);
+			if (field->id < 32) cc.or_(markedLo, bit);
+			else                cc.or_(markedHi, bit);
+			cc.bind(skip);
+		}
 	}
 
 	// Apply forceMarkMask if pForceMsk != null
@@ -526,47 +570,70 @@ static int (*x86_emit_clear_mark_check(deltajitdata_t *jd))(void*, void*, void*,
 #endif // REHLDS_JIT_BACKEND_X86
 
 // =========================================================================
-// aarch64 backend
+// aarch64 backend (NEON block fast-path)
+//
+// NEON has direct equivalents for movdqu (ldr q), pcmpeqb (cmeq.16b), and
+// prefetcht0 (prfm pldl1keep). It does NOT have a single-instruction
+// equivalent for pmovmskb. We synthesize a 16-bit "any byte differs" mask
+// via the standard NEON idiom: AND the byte-diff vector with a fixed
+// {1,2,4,8,...} bit-position constant, then sum each half via addv to get
+// one byte per half, and pack the two bytes into a GP. ~5 NEON ops total.
 // =========================================================================
 #if REHLDS_JIT_BACKEND_ARM64
 
 namespace asma = asmjit::a64;
 
-static void a64_emit_field_changed(asmjit::a64::Compiler &cc,
+// Bit-position constant used to materialize a 16-bit pmovmskb-style mask
+// from a NEON byte-diff vector. After AND with this constant, byte i becomes
+// 2^(i mod 8) iff the original diff byte was 0xFF; addv across each half
+// then sums those into a single byte = the corresponding mask byte.
+alignas(16) static const uint8_t kPmovmskbBitConst[16] = {
+	1, 2, 4, 8, 16, 32, 64, 128,
+	1, 2, 4, 8, 16, 32, 64, 128
+};
+
+// Emit the NEON block compare for one 16-byte memblock. After this,
+// blockMask is a 16-bit value where bit i = 1 iff byte i within the block
+// differs between src and dst. bit_const is a pre-loaded vec128 holding
+// kPmovmskbBitConst (load it once at function entry, reuse per block).
+static void a64_emit_block_compare(asmjit::a64::Compiler &cc,
 	const asma::Gp &src, const asma::Gp &dst,
-	deltajit_field *field, const asma::Gp &changed)
+	const deltajit_memblock_itr_t *itr,
+	const asma::Vec &bit_const,
+	const asma::Gp &blockMask)
 {
-	int type = field->type & ~DT_SIGNED;
-	int off = field->offset;
-
-	asma::Gp a = cc.new_gp32();
-	asma::Gp b = cc.new_gp32();
-
-	switch (type) {
-	case DT_BYTE:
-		cc.ldrb(a, asma::ptr(src, off));
-		cc.ldrb(b, asma::ptr(dst, off));
-		break;
-	case DT_SHORT:
-		cc.ldrh(a, asma::ptr(src, off));
-		cc.ldrh(b, asma::ptr(dst, off));
-		break;
-	case DT_FLOAT:
-	case DT_INTEGER:
-	case DT_ANGLE:
-	case DT_TIMEWINDOW_8:
-	case DT_TIMEWINDOW_BIG:
-		cc.ldr(a, asma::ptr(src, off));
-		cc.ldr(b, asma::ptr(dst, off));
-		break;
-	default:
-		cc.mov(changed, 0);
-		return;
+	int blockOff = itr->memblockId * 16;
+	if (itr->prefetchBlockId != -1) {
+		int prefetchOff = itr->prefetchBlockId * 16;
+		cc.prfm(asmjit::Imm((uint32_t)asmjit::a64::Predicate::PRFOp::kPLDL1KEEP),
+			asma::ptr(src, prefetchOff));
+		cc.prfm(asmjit::Imm((uint32_t)asmjit::a64::Predicate::PRFOp::kPLDL1KEEP),
+			asma::ptr(dst, prefetchOff));
 	}
 
-	// changed = (a != b) ? 1 : 0
-	cc.cmp(a, b);
-	cc.cset(changed, asmjit::arm::CondCode::kNE);
+	asma::Vec src_v = cc.new_vec128();
+	asma::Vec dst_v = cc.new_vec128();
+	cc.ldr(src_v, asma::ptr(src, blockOff));
+	cc.ldr(dst_v, asma::ptr(dst, blockOff));
+	cc.cmeq(src_v.b16(), src_v.b16(), dst_v.b16());   // 0xFF where bytes equal
+	cc.mvn(src_v.b16(), src_v.b16());                  // 0xFF where bytes differ
+	cc.and_(src_v.b16(), src_v.b16(), bit_const.b16());// each byte: 0 or 2^(i mod 8)
+
+	// addv on .8b reduces the low 8 bytes to a single byte at lane 0.
+	asma::Vec lo_v = cc.new_vec128();
+	cc.addv(lo_v.b(), src_v.b8());
+
+	// ext rotates the high half into the low position; addv again.
+	asma::Vec hi_v = cc.new_vec128();
+	cc.ext(hi_v.b16(), src_v.b16(), src_v.b16(), 8);
+	cc.addv(hi_v.b(), hi_v.b8());
+
+	// Pack two bytes into the 16-bit GP mask.
+	cc.umov(blockMask, lo_v.b(0));
+	asma::Gp tmp = cc.new_gp32();
+	cc.umov(tmp, hi_v.b(0));
+	cc.lsl(tmp, tmp, 8);
+	cc.orr(blockMask, blockMask, tmp);
 }
 
 static int (*a64_emit_test_delta(deltajitdata_t *jd))(void*, void*, void*)
@@ -588,24 +655,55 @@ static int (*a64_emit_test_delta(deltajitdata_t *jd))(void*, void*, void*)
 	cc.mov(neededBits, 0);
 	cc.mov(highestBit, -1);
 
-	// Non-string fields
+	// Load the pmovmskb bit-position constant once for the whole function.
+	asma::Gp const_addr = cc.new_gpz();
+	cc.mov(const_addr, (uint64_t)(uintptr_t)kPmovmskbBitConst);
+	asma::Vec bit_const = cc.new_vec128();
+	cc.ldr(bit_const, asma::ptr(const_addr));
+
+	// Phase 1: NEON block iteration → markedLo/markedHi (64-bit field mask).
+	asma::Gp markedLo = cc.new_gp32("markedLo");
+	asma::Gp markedHi = cc.new_gp32("markedHi");
+	cc.mov(markedLo, 0);
+	cc.mov(markedHi, 0);
+
+	for (unsigned i = 0; i < jd->numItrBlocks; i++) {
+		auto *itr = &jd->itrBlocks[i];
+		auto *block = itr->memblock;
+		asma::Gp blockMask = cc.new_gp32();
+		a64_emit_block_compare(cc, src, dst, itr, bit_const, blockMask);
+
+		for (unsigned j = 0; j < block->numFields; j++) {
+			auto *bf = &block->fields[j];
+			deltajit_field *field = bf->field;
+			asmjit::Label skip = cc.new_label();
+			asma::Gp test_tmp = cc.new_gp32();
+			cc.mov(test_tmp, (uint32_t)bf->mask);
+			cc.and_(test_tmp, blockMask, test_tmp);
+			cc.cbz(test_tmp, skip);
+			uint32 bit = 1u << (field->id & 31);
+			if (field->id < 32) cc.orr(markedLo, markedLo, bit);
+			else                cc.orr(markedHi, markedHi, bit);
+			cc.bind(skip);
+		}
+	}
+
+	// Phase 2: score each non-string field once against the union mask.
 	for (unsigned i = 0; i < jd->numFields; i++) {
 		deltajit_field *field = &jd->fields[i];
 		if ((field->type & ~DT_SIGNED) == DT_STRING) continue;
 
-		asma::Gp changed = cc.new_gp32();
-		a64_emit_field_changed(cc, src, dst, field, changed);
-
+		uint32 bit = 1u << (field->id & 31);
 		asmjit::Label not_changed = cc.new_label();
-		cc.cbz(changed, not_changed);
+		asma::Gp tmp = cc.new_gp32();
+		cc.mov(tmp, bit);
+		cc.and_(tmp, field->id < 32 ? markedLo : markedHi, tmp);
+		cc.cbz(tmp, not_changed);
 
-		// highestBit = max(highestBit, field->id)
 		asma::Gp idImm = cc.new_gp32();
 		cc.mov(idImm, (int)field->id);
 		cc.cmp(highestBit, idImm);
 		cc.csel(highestBit, idImm, highestBit, asmjit::arm::CondCode::kLT);
-
-		// neededBits += field->significantBits
 		cc.add(neededBits, neededBits, (uint32_t)field->significantBits);
 
 		cc.bind(not_changed);
@@ -702,24 +800,34 @@ static int (*a64_emit_clear_mark_check(deltajitdata_t *jd))(void*, void*, void*,
 	cc.mov(markedLo, 0);
 	cc.mov(markedHi, 0);
 
-	for (unsigned i = 0; i < jd->numFields; i++) {
-		deltajit_field *field = &jd->fields[i];
-		if ((field->type & ~DT_SIGNED) == DT_STRING) continue;
+	// Load pmovmskb bit-position constant once.
+	asma::Gp const_addr = cc.new_gpz();
+	cc.mov(const_addr, (uint64_t)(uintptr_t)kPmovmskbBitConst);
+	asma::Vec bit_const = cc.new_vec128();
+	cc.ldr(bit_const, asma::ptr(const_addr));
 
-		asma::Gp changed = cc.new_gp32();
-		a64_emit_field_changed(cc, src, dst, field, changed);
+	// NEON block iteration: build union mask via per-block diff vec → 16-bit
+	// GP mask → per-field bit-OR. OR is idempotent so multi-block fields land
+	// in the right place.
+	for (unsigned i = 0; i < jd->numItrBlocks; i++) {
+		auto *itr = &jd->itrBlocks[i];
+		auto *block = itr->memblock;
+		asma::Gp blockMask = cc.new_gp32();
+		a64_emit_block_compare(cc, src, dst, itr, bit_const, blockMask);
 
-		asmjit::Label not_changed = cc.new_label();
-		cc.cbz(changed, not_changed);
-
-		uint32 bit = 1u << (field->id & 31);
-		if (field->id < 32) {
-			cc.orr(markedLo, markedLo, bit);
-		} else {
-			cc.orr(markedHi, markedHi, bit);
+		for (unsigned j = 0; j < block->numFields; j++) {
+			auto *bf = &block->fields[j];
+			deltajit_field *field = bf->field;
+			asmjit::Label skip = cc.new_label();
+			asma::Gp test_tmp = cc.new_gp32();
+			cc.mov(test_tmp, (uint32_t)bf->mask);
+			cc.and_(test_tmp, blockMask, test_tmp);
+			cc.cbz(test_tmp, skip);
+			uint32 bit = 1u << (field->id & 31);
+			if (field->id < 32) cc.orr(markedLo, markedLo, bit);
+			else                cc.orr(markedHi, markedHi, bit);
+			cc.bind(skip);
 		}
-
-		cc.bind(not_changed);
 	}
 
 	// Force-mark mask
