@@ -131,6 +131,7 @@ ISteamUtils     *g_pSteamGameServerUtils = nullptr;
 ISteamNetworking *g_pSteamGameServerNetworking = nullptr;
 ISteamGameServerStats *g_pSteamGameServerStats = nullptr;
 ISteamHTTP      *g_pSteamGameServerHTTP = nullptr;
+ISteamApps      *g_pSteamGameServerApps = nullptr;
 
 bool             g_bDebugLog = false;
 
@@ -488,17 +489,49 @@ SHIM_EXPORT bool SteamGameServer_Init(uint32 unIP, uint16 usSteamPort, uint16 us
     g_pSteamGameServerNetworking = sc->GetISteamNetworking(g_hSteamUserGS, g_hSteamPipeGS, kVerSteamNetworking);
     g_pSteamGameServerStats      = sc->GetISteamGameServerStats(g_hSteamUserGS, g_hSteamPipeGS, kVerSteamGameServerStats);
     g_pSteamGameServerHTTP       = sc->GetISteamHTTP(g_hSteamUserGS, g_hSteamPipeGS, kVerSteamHTTP);
+    // Legacy 2010 libsteam_api.so's helper at 0x95e4 also acquires
+    // ISteamApps in this slot of the gameserver init flow. Without
+    // this call the gameserver state inside steamclient.so is
+    // partially initialized; among other consequences, Steam's master
+    // server policy decision returns BSecure()=false ("VAC secure
+    // mode disabled") even when SetLocalIPBinding + CreateLocalUser +
+    // GetISteamGameServer + InitGameServer all succeed.
+    g_pSteamGameServerApps       = sc->GetISteamApps(g_hSteamUserGS, g_hSteamPipeGS, kVerSteamApps);
 
-    // Translate EServerMode → InitGameServer flags.
-    // From isteamgameserver.h: k_unServerFlagSecure = 0x20, k_unServerFlagDedicated = 0x08
+    // Translate EServerMode → InitGameServer flags using the LEGACY
+    // v011 flag bit definitions (rehlds/public/steam/isteamgameserver.h
+    // line 261+):
+    //
+    //   k_unServerFlagSecure    = 0x02   // server wants to be secure
+    //   k_unServerFlagDedicated = 0x04   // server is dedicated
+    //   k_unServerFlagLinux     = 0x08   // linux build
+    //   k_unServerFlagPassworded= 0x10
+    //   k_unServerFlagPrivate   = 0x20   // server shouldn't list on master
+    //
+    // These values are NOT the same as the anniversary SteamWorks SDK's
+    // k_unServerFlag* values (which use 0x20 for Secure, 0x08 for
+    // Dedicated). The ABI we're shipping against here is v1.60, so the
+    // legacy bit positions are what apply. An earlier version of this
+    // function used the anniversary values, which inadvertently set
+    // Linux|Private (0x08|0x20=0x28) for AuthAndSecure mode — telling
+    // Steam to keep the server unlisted, which made the master server
+    // decline VAC and reply BSecure()=false.
+    //
+    // Mode → flags mapping is mirrored from the legacy lib's helper at
+    // 0x95e4 / 0x9761 (the bIsClient=0 / gameserver path):
+    //   eServerModeNoAuthentication        (1) → 0x20 (Private — LAN-only)
+    //   eServerModeAuthentication          (2) → 0    (no flags)
+    //   eServerModeAuthenticationAndSecure (3) → 0x02 (Secure)
+    //
+    // Note the legacy lib does NOT set Dedicated here — the engine
+    // calls SetDedicatedServer() separately on ISteamGameServer.
     uint32 unFlags = 0;
-    if (eServerMode == eServerModeAuthentication ||
-        eServerMode == eServerModeAuthenticationAndSecure) {
-        unFlags |= 0x08; // dedicated/listed
+    if (eServerMode == eServerModeNoAuthentication) {
+        unFlags = 0x20; // Private (LAN, don't list)
+    } else if (eServerMode == eServerModeAuthenticationAndSecure) {
+        unFlags = 0x02; // Secure
     }
-    if (eServerMode == eServerModeAuthenticationAndSecure) {
-        unFlags |= 0x20; // VAC secure
-    }
+    // mode 2 (eServerModeAuthentication) → unFlags stays 0
     AppId_t appId = (AppId_t)read_app_id();
     if (!g_pSteamGameServerInterface->InitGameServer(unIP, usGamePort, usQueryPort,
                                                      unFlags, appId, pchVersionString)) {
@@ -529,6 +562,7 @@ SHIM_EXPORT void SteamGameServer_Shutdown() {
     g_pSteamGameServerNetworking = nullptr;
     g_pSteamGameServerStats = nullptr;
     g_pSteamGameServerHTTP = nullptr;
+    g_pSteamGameServerApps = nullptr;
 }
 
 SHIM_EXPORT void SteamGameServer_RunCallbacks() {
