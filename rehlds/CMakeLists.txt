@@ -232,17 +232,35 @@ if (NOT TARGET bzip2)
 endif()
 
 # AsmJit — multi-arch JIT codegen (x86_32, x86_64, aarch64). Built as a
-# static library here and linked into the engine. We slim it: drop
-# logging/text/builder/introspection (unused by delta_jit codepaths) and
-# foreign-arch backends (we only need codegen for the host arch).
+# static library here and linked into the engine. We slim it: drop logging
+# and foreign-arch backends. Builder/Compiler/Introspection MUST stay enabled
+# because delta_jit.cpp uses asmjit::x86::Compiler / a64::Compiler (those
+# require Builder + Introspection at build time).
 if (NOT TARGET asmjit)
 	set(ASMJIT_STATIC           ON  CACHE INTERNAL "")
 	set(ASMJIT_NO_FOREIGN       ON  CACHE INTERNAL "")
 	set(ASMJIT_NO_TEXT          ON  CACHE INTERNAL "")
 	set(ASMJIT_NO_LOGGING       ON  CACHE INTERNAL "")
-	set(ASMJIT_NO_BUILDER       ON  CACHE INTERNAL "")
-	set(ASMJIT_NO_INTROSPECTION ON  CACHE INTERNAL "")
+	# Static lib gets linked into the shared engine_i486.so on amd64/aarch64;
+	# need PIC. Doesn't hurt on x86-32 (we still produce a non-PIC shared
+	# object there for legacy reasons; ARCH_PIC=OFF on x86-32, but compiling
+	# the static dep as PIC is fine — the engine .so links it either way).
+	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 	add_subdirectory(../dep/asmjit asmjit)
+	# The bundled linux32 stdlib in rehlds/lib/linux32/ predates C++14 and
+	# doesn't provide `operator delete(void*, size_t)`, so AsmJit's sized-
+	# delete callsites refuse to link. The unsized `operator delete(void*)`
+	# is universally available; -fno-sized-deallocation makes the compiler
+	# fall back to it. No-op on amd64/aarch64.
+	#
+	# Also forward ARCH_BITNESS_FLAG (=-m32 on x86-32, empty elsewhere) so
+	# asmjit gets the same target as the engine — without this the host gcc
+	# defaults to amd64 codegen and the link fails with type-mangling
+	# mismatches (e.g. uint64_t resolving to `unsigned long` in a 64-bit
+	# build vs `unsigned long long` in a 32-bit build).
+	if (TARGET asmjit)
+		target_compile_options(asmjit PRIVATE -fno-sized-deallocation ${ARCH_BITNESS_FLAG})
+	endif()
 endif()
 
 if (NOT TARGET appversion)
@@ -283,14 +301,11 @@ target_compile_definitions(engine PRIVATE
 	REHLDS_UNIT_TESTS REHLDS_SSE>
 )
 
-# REHLDS_JIT is x86-32-only — jitasm.h emits raw 32-bit x86 machine code at
-# runtime. On amd64/aarch64 the engine falls through to the non-JIT codepaths
-# in delta.cpp. (A future commit replaces jitasm with AsmJit, which has
-# multi-arch backends and lets us re-enable this everywhere.)
-if (ARCH_IS_X86_32)
-	target_compile_definitions(engine PRIVATE REHLDS_JIT)
-	target_compile_definitions(engine PRIVATE $<$<CONFIG:Unittests>:REHLDS_JIT>)
-endif()
+# REHLDS_JIT now uses AsmJit's multi-arch codegen (x86-32, x86-64, aarch64).
+# delta_jit.cpp emits per-field comparisons via asmjit::x86::Compiler or
+# asmjit::a64::Compiler depending on the host arch.
+target_compile_definitions(engine PRIVATE REHLDS_JIT)
+target_compile_definitions(engine PRIVATE $<$<CONFIG:Unittests>:REHLDS_JIT>)
 
 target_sources(engine PRIVATE
 	${COMMON_SRCS}
