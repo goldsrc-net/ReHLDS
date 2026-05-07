@@ -32,9 +32,11 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdint>
+#include <climits>
 #include <pthread.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <vector>
 #include <mutex>
@@ -162,6 +164,36 @@ EServerMode      g_eServerModeGS = eServerModeInvalid;
 // reflective getter would see the right value.
 bool             g_bTryCatchCallbacks = false;
 
+// Breakpad crash handler state, populated by
+// SteamAPI_UseBreakpadCrashHandler. The signal handler installed
+// during that call uses these to write a minidump.
+char             g_breakpadVersion[64] = {0};
+char             g_breakpadBuild[64]   = {0};
+char             g_breakpadType[64]    = {0};
+bool             g_breakpadFullDump    = false;
+typedef void (*PFNPreMinidumpCallback_t)(void *context);
+PFNPreMinidumpCallback_t g_pPreMinidumpCallback = nullptr;
+void            *g_pPreMinidumpContext = nullptr;
+bool             g_breakpadInstalled   = false;
+
+// ContentServer-side state (the deprecated v002 interface). Anniversary
+// steamclient.so generally doesn't expose SteamContentServer002 anymore,
+// so all of these stay nullptr in practice — but the legacy lib's
+// accessors+init flow goes through here, so we replicate the shape for
+// strict parity.
+HSteamPipe       g_hSteamPipeCS = 0;
+HSteamUser       g_hSteamUserCS = 0;
+void            *g_pSteamContentServer = nullptr;       // ISteamContentServer*
+void            *g_pSteamContentServerUtils = nullptr;  // ISteamUtils*
+
+// Breakpad helper signature: legacy steamclient.so exports
+// Breakpad_SteamMiniDumpInit(int unknown, const char *appBuild,
+//                             const char *appVersion). We resolve it
+// alongside the other breakpad trampolines and call it during
+// UseBreakpadCrashHandler.
+typedef void (*Breakpad_MiniDumpInit_t)(int /*?*/, const char *appBuild, const char *appVersion);
+Breakpad_MiniDumpInit_t g_pBreakpad_SteamMiniDumpInit = nullptr;
+
 bool             g_bDebugLog = false;
 
 void log_init() {
@@ -255,6 +287,8 @@ bool ensure_steamclient_loaded() {
     g_pBreakpad_SteamWriteMiniDumpSetComment =
         (Breakpad_SetComment_t)dlsym(h, "Breakpad_SteamWriteMiniDumpSetComment");
     g_pBreakpad_SteamSetSteamID = (Breakpad_SetSteamID_t)dlsym(h, "Breakpad_SteamSetSteamID");
+    g_pBreakpad_SteamMiniDumpInit =
+        (Breakpad_MiniDumpInit_t)dlsym(h, "Breakpad_SteamMiniDumpInit");
 
     if (!g_pCreateInterface) {
         fprintf(stderr, "libsteam_api: steamclient.so missing CreateInterface\n");
@@ -353,7 +387,15 @@ void run_callbacks_pump(HSteamPipe pipe, bool bGameServer) {
 #define SHIM_EXPORT extern "C" __attribute__((visibility("default")))
 
 // ─── Init / Shutdown / Run ──────────────────────────────────────────────────
-SHIM_EXPORT bool SteamAPI_Init() {
+//
+// Legacy v1.60 routes both SteamAPI_Init and SteamAPI_InitSafe through a
+// single internal helper @ 0x84ac with a bSafe flag (0 / 1 respectively).
+// In legacy semantics "safe" mode means the lib uses
+// VERSION_SAFE_STEAM_API_INTERFACES-style sub-interface lookups so a
+// missing or version-mismatched optional interface doesn't fail the
+// whole init. We honor the same shape: shared internal helper + bSafe
+// arg, with safe-mode tolerating missing non-critical sub-interfaces.
+static bool steam_api_init_internal(bool bSafe) {
     g_pSteamClient = acquire_steamclient012();
     if (!g_pSteamClient) return false;
     g_hSteamPipe = g_pSteamClient->CreateSteamPipe();
@@ -377,22 +419,30 @@ SHIM_EXPORT bool SteamAPI_Init() {
     g_pSteamScreenshots     = g_pSteamClient->GetISteamScreenshots(g_hSteamUser, g_hSteamPipe, kVerSteamScreenshots);
     g_pSteamHTTP            = g_pSteamClient->GetISteamHTTP(g_hSteamUser, g_hSteamPipe, kVerSteamHTTP);
     g_pSteamUnifiedMessages = g_pSteamClient->GetISteamUnifiedMessages(g_hSteamUser, g_hSteamPipe, kVerSteamUnifiedMessages);
-    if (!g_pSteamUser || !g_pSteamFriends || !g_pSteamUtils ||
-        !g_pSteamMatchmaking || !g_pSteamMatchmakingServers || !g_pSteamUserStats ||
-        !g_pSteamApps || !g_pSteamNetworking) {
-        fprintf(stderr, "libsteam_api: SteamAPI_Init failed: one or more "
-                        "core interfaces could not be acquired with v1.60 "
-                        "version strings against this steamclient.so\n");
-        return false;
+    bool missing_core = !g_pSteamUser || !g_pSteamFriends || !g_pSteamUtils ||
+                        !g_pSteamMatchmaking || !g_pSteamMatchmakingServers || !g_pSteamUserStats ||
+                        !g_pSteamApps || !g_pSteamNetworking;
+    if (missing_core) {
+        if (bSafe) {
+            // Safe mode: tolerate missing core interfaces. Caller code
+            // that uses them will see NULL and can branch accordingly.
+            logf("warning: SteamAPI_InitSafe completed with missing core interface(s); proceeding under bSafe=1");
+        } else {
+            fprintf(stderr, "libsteam_api: SteamAPI_Init failed: one or more "
+                            "core interfaces could not be acquired with v1.60 "
+                            "version strings against this steamclient.so\n");
+            return false;
+        }
     }
     // HTTP / RemoteStorage / Screenshots / UnifiedMessages are non-critical
     // on a dedicated server — log a warning if missing but don't abort.
     if (!g_pSteamHTTP) logf("warning: SteamHTTP interface unavailable (non-fatal)");
-    logf("SteamAPI_Init complete (pipe=%d user=%d)", g_hSteamPipe, g_hSteamUser);
+    logf("SteamAPI_Init complete (pipe=%d user=%d safe=%d)", g_hSteamPipe, g_hSteamUser, (int)bSafe);
     return true;
 }
 
-SHIM_EXPORT bool SteamAPI_InitSafe() { return SteamAPI_Init(); }
+SHIM_EXPORT bool SteamAPI_Init()      { return steam_api_init_internal(/*bSafe=*/false); }
+SHIM_EXPORT bool SteamAPI_InitSafe()  { return steam_api_init_internal(/*bSafe=*/true);  }
 
 SHIM_EXPORT void SteamAPI_Shutdown() {
     if (g_pSteamClient && g_hSteamPipe) {
@@ -409,6 +459,18 @@ SHIM_EXPORT void SteamAPI_Shutdown() {
 }
 
 SHIM_EXPORT void SteamAPI_RunCallbacks() {
+    // Legacy v1.60 disasm @ 0x76f1 calls slot 14 of ISteamUtils
+    // (`call [edx+0x38]` on `[ebx+0x13ec]`=g_pSteamUtils) — that's
+    // ISteamUtils::RunFrame(). steamclient.so's RunFrame internally
+    // pumps queued callbacks for the client-side pipe.
+    //
+    // We additionally drive our own callback registry pump via
+    // Steam_BGetCallback / Steam_FreeLastCallback so consumer-side
+    // CCallbackBase objects registered via SteamAPI_RegisterCallback
+    // get invoked. The two are complementary: RunFrame handles
+    // steamclient-internal frame work, our pump dispatches to the
+    // consumer's registered callbacks.
+    if (g_pSteamUtils) g_pSteamUtils->RunFrame();
     run_callbacks_pump(g_hSteamPipe, /*bGameServer=*/false);
 }
 
@@ -416,10 +478,39 @@ SHIM_EXPORT bool SteamAPI_IsSteamRunning() {
     return ensure_steamclient_loaded();  // best-effort: we got steamclient.so loaded
 }
 
-SHIM_EXPORT bool SteamAPI_RestartAppIfNecessary(uint32 /*unOwnAppID*/) {
-    // Dedicated servers don't restart through the Steam client — return false
-    // (= "do NOT restart, current process should continue") in all cases.
-    return false;
+SHIM_EXPORT bool SteamAPI_RestartAppIfNecessary(uint32 unOwnAppID) {
+    // Legacy v1.60 disasm @ 0x787c follows this shape:
+    //   1. If unOwnAppID == 0 → return false (don't restart).
+    //   2. Read $SteamAppId env var. If unset, write steam_appid.txt
+    //      with unOwnAppID and return false.
+    //   3. If env var matches unOwnAppID → return false.
+    //   4. Otherwise the legacy lib would exec steam.sh to restart
+    //      under the right app context — but this is a dedicated-server
+    //      lib and exec'ing the Steam client is wrong here.
+    //
+    // For dedicated servers the only scenario that matters is (1) and
+    // (2). Mirror those exactly. Skip the exec branch — there's no
+    // environment in which a HLDS process should re-launch itself
+    // through steam.sh.
+    if (unOwnAppID == 0) return false;
+    const char *env = getenv("SteamAppId");
+    if (env && *env) {
+        char *end = nullptr;
+        unsigned long parsed = strtoul(env, &end, 10);
+        if (end && *end == '\0' && parsed == unOwnAppID) {
+            return false; // already running with the right app ID
+        }
+    }
+    // Write steam_appid.txt so subsequent SteamAPI_Init / SteamGameServer_Init
+    // calls have the AppID available without an env var. Mirrors the
+    // legacy lib's behavior of dropping the file on disk when the env
+    // variable is missing.
+    FILE *f = fopen("steam_appid.txt", "w");
+    if (f) {
+        fprintf(f, "%u\n", unOwnAppID);
+        fclose(f);
+    }
+    return false; // dedicated server: never request restart
 }
 
 SHIM_EXPORT const char *SteamAPI_GetSteamInstallPath() {
@@ -515,8 +606,83 @@ SHIM_EXPORT void SteamAPI_SetBreakpadAppID(uint32 unAppID) {
         g_pBreakpad_SteamSetAppID(unAppID);
 }
 
-SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char * /*v*/, const char * /*d*/,
-        const char * /*t*/, bool /*full*/, void * /*ctx*/, PFNPreMinidumpCallback /*cb*/) {}
+// Crash signal handler installed by SteamAPI_UseBreakpadCrashHandler.
+// On SIGSEGV/SIGABRT/SIGFPE/SIGILL/SIGBUS:
+//   1. Invoke the user's pre-minidump callback if registered.
+//   2. Call Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId
+//      from steamclient.so to produce a minidump on disk.
+//   3. Restore the default signal disposition and re-raise so the
+//      kernel's normal handling (core dump or process termination)
+//      proceeds.
+static void shim_breakpad_signal_handler(int sig, siginfo_t * /*info*/, void * /*uctx*/) {
+    if (g_pPreMinidumpCallback) {
+        g_pPreMinidumpCallback(g_pPreMinidumpContext);
+    }
+    if (g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId) {
+        // Three args: structured exception code, exception info ptr,
+        // build ID. We pass signal number as the first, NULL exception
+        // info (we don't have a Win32-style EXCEPTION_RECORD on POSIX),
+        // and the appID for build ID.
+        g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId(
+            (uint32)sig, nullptr, g_unBreakpadAppID);
+    }
+    // Restore default and re-raise so the kernel does its thing
+    // (core dump, abort, etc.) — we don't return from the handler.
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
+                                                  const char *pchDate,
+                                                  const char *pchTime,
+                                                  bool bFullMemoryDumps,
+                                                  void *pvContext,
+                                                  PFNPreMinidumpCallback m_pfnPreMinidumpCallback) {
+    // Match legacy v1.60 @ 0x8a3a: print the diagnostic line, store
+    // version/date/build info, install signal handlers, and drive
+    // Breakpad_SteamMiniDumpInit from steamclient.so for the
+    // breakpad-side init.
+    fwrite("Using breakpad crash handler\n", 29, 1, stderr);
+
+    if (pchVersion) {
+        strncpy(g_breakpadVersion, pchVersion, sizeof(g_breakpadVersion) - 1);
+        g_breakpadVersion[sizeof(g_breakpadVersion) - 1] = '\0';
+    }
+    if (pchDate) {
+        strncpy(g_breakpadBuild, pchDate, sizeof(g_breakpadBuild) - 1);
+        g_breakpadBuild[sizeof(g_breakpadBuild) - 1] = '\0';
+    }
+    if (pchTime) {
+        strncpy(g_breakpadType, pchTime, sizeof(g_breakpadType) - 1);
+        g_breakpadType[sizeof(g_breakpadType) - 1] = '\0';
+    }
+    g_breakpadFullDump = bFullMemoryDumps;
+    g_pPreMinidumpCallback = (PFNPreMinidumpCallback_t)m_pfnPreMinidumpCallback;
+    g_pPreMinidumpContext = pvContext;
+
+    // Drive steamclient.so's MiniDumpInit so its internal breakpad state
+    // is configured (sets up the dump folder, build identifier, etc.).
+    if (g_pBreakpad_SteamMiniDumpInit) {
+        g_pBreakpad_SteamMiniDumpInit(0, pchDate ? pchDate : "",
+                                       pchVersion ? pchVersion : "");
+    }
+
+    if (g_breakpadInstalled) return; // idempotent
+    g_breakpadInstalled = true;
+
+    // Install signal handlers for the canonical crash-causing signals.
+    // SA_RESETHAND so the kernel restores SIG_DFL when the handler
+    // fires (in case raise(sig) inside the handler doesn't restore).
+    struct sigaction sa = {};
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND | SA_NODEFER;
+    sa.sa_sigaction = shim_breakpad_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGFPE,  &sa, nullptr);
+    sigaction(SIGILL,  &sa, nullptr);
+    sigaction(SIGBUS,  &sa, nullptr);
+}
 
 // ─── Sub-interface accessors (all return cached pointers) ───────────────────
 SHIM_EXPORT ISteamClient    *SteamClient()                 { return g_pSteamClient; }
@@ -641,9 +807,27 @@ SHIM_EXPORT bool SteamGameServer_InitSafe(uint32 unIP, uint16 usSteamPort, uint1
 }
 
 SHIM_EXPORT void SteamGameServer_Shutdown() {
+    // Match legacy v1.60 disasm @ 0x992a:
+    //   1. If ISteamGameServer is non-null and BLoggedOn() returns true,
+    //      take a "log off then release" branch first (jne 0x99de).
+    //   2. Otherwise fall through to the basic release path: ReleaseUser,
+    //      BReleaseSteamPipe, then BShutdownIfAllPipesClosed (slot 22).
+    //   3. Finally tear down the breakpad/init struct
+    //      (legacy: helper @ 0x7101, our equivalent: clear cached state).
+    if (g_pSteamGameServerInterface && g_pSteamGameServerInterface->BLoggedOn()) {
+        // Legacy follows the "logged on" branch which involves the
+        // ServersDisconnected_t callback dispatch. The simplest equivalent
+        // is to call LogOff and let the engine's RunCallbacks pick up the
+        // disconnect callback. Then proceed with normal cleanup.
+        g_pSteamGameServerInterface->LogOff();
+    }
+
     if (g_pSteamClientGameServer && g_hSteamPipeGS) {
         if (g_hSteamUserGS) g_pSteamClientGameServer->ReleaseUser(g_hSteamPipeGS, g_hSteamUserGS);
         g_pSteamClientGameServer->BReleaseSteamPipe(g_hSteamPipeGS);
+        // Slot 22 of ISteamClient012 — legacy calls this at the tail of
+        // SteamGameServer_Shutdown (`call [edx+0x58]` @ 0x998d).
+        g_pSteamClientGameServer->BShutdownIfAllPipesClosed();
     }
     g_hSteamPipeGS = 0; g_hSteamUserGS = 0;
     g_pSteamGameServerInterface = nullptr;
@@ -652,6 +836,7 @@ SHIM_EXPORT void SteamGameServer_Shutdown() {
     g_pSteamGameServerStats = nullptr;
     g_pSteamGameServerHTTP = nullptr;
     g_pSteamGameServerApps = nullptr;
+    g_eServerModeGS = eServerModeInvalid;
 }
 
 SHIM_EXPORT void SteamGameServer_RunCallbacks() {
@@ -700,29 +885,112 @@ SHIM_EXPORT ISteamApps       *SteamGameServerApps()     {
 
 // ─── Legacy obsolete content-server stubs (engine doesn't call these but the
 //     legacy lib exports them and we're a strict drop-in) ──────────────────
-SHIM_EXPORT void *SteamContentServer()           { return nullptr; }
-SHIM_EXPORT void *SteamContentServerUtils()      { return nullptr; }
-SHIM_EXPORT bool  SteamContentServer_Init(uint32 /*unIP*/, uint16 /*usPort*/) { return false; }
-SHIM_EXPORT void  SteamContentServer_RunCallbacks() {}
-SHIM_EXPORT void  SteamContentServer_Shutdown()  {}
+// ContentServer family. Legacy v1.60 lib supports the deprecated
+// "SteamContentServer002" interface used by Valve's content delivery
+// servers (separate from gameservers — they served HL/CS asset
+// streams). Anniversary steamclient.so doesn't export the v002
+// interface anymore, so all calls below gracefully return NULL/false
+// against modern Steam runtimes. Implementations follow the legacy
+// shape so the public ABI is honored if anyone happens to consume
+// the lib in a context that still has v002 (e.g., a legacy 2010
+// steamclient.so explicitly loaded via STEAM_API_DLOPEN_FORCE).
+SHIM_EXPORT void *SteamContentServer() {
+    return g_pSteamContentServer; // matches legacy disasm @ 0x92c4
+}
+SHIM_EXPORT void *SteamContentServerUtils() {
+    return g_pSteamContentServerUtils; // matches legacy disasm @ 0x92da
+}
+
+SHIM_EXPORT bool SteamContentServer_Init(uint32 unIP, uint16 usPort) {
+    // Legacy disasm @ 0x92f0 mirrors the SteamGameServer_Init flow but
+    // with EAccountTypeContentServer (= 6) and the v002 interface
+    // strings. Follow the same pattern; anniversary steamclient.so
+    // returns NULL from CreateInterface("SteamContentServer002") and
+    // we report failure cleanly.
+    ISteamClient *sc = acquire_steamclient012();
+    if (!sc) return false;
+    sc->SetLocalIPBinding(unIP, usPort);
+    g_hSteamPipeCS = 0;
+    g_hSteamUserCS = sc->CreateLocalUser(&g_hSteamPipeCS,
+                                         (EAccountType)6 /* k_EAccountTypeContentServer */);
+    if (!g_hSteamUserCS || !g_hSteamPipeCS) return false;
+    g_pSteamContentServer = sc->GetISteamGenericInterface(
+        g_hSteamUserCS, g_hSteamPipeCS, kVerSteamContentServer);
+    if (!g_pSteamContentServer) return false;
+    g_pSteamContentServerUtils = sc->GetISteamUtils(g_hSteamPipeCS, kVerSteamUtils);
+    return true;
+}
+
+SHIM_EXPORT void SteamContentServer_RunCallbacks() {
+    // Legacy disasm @ 0x9500 dispatches via the content-server pipe.
+    // Mirror via our pump so any registered CCallbackBase objects with
+    // the gameserver-flag clear get invoked against this pipe.
+    if (g_hSteamPipeCS) run_callbacks_pump(g_hSteamPipeCS, /*bGameServer=*/false);
+}
+
+SHIM_EXPORT void SteamContentServer_Shutdown() {
+    // Legacy disasm @ 0x940b: ReleaseUser, BReleaseSteamPipe, then
+    // BShutdownIfAllPipesClosed.
+    if (g_pSteamClientGameServer && g_hSteamPipeCS) {
+        if (g_hSteamUserCS) g_pSteamClientGameServer->ReleaseUser(g_hSteamPipeCS, g_hSteamUserCS);
+        g_pSteamClientGameServer->BReleaseSteamPipe(g_hSteamPipeCS);
+        g_pSteamClientGameServer->BShutdownIfAllPipesClosed();
+    }
+    g_hSteamPipeCS = 0; g_hSteamUserCS = 0;
+    g_pSteamContentServer = nullptr;
+    g_pSteamContentServerUtils = nullptr;
+}
 
 // ─── Legacy steamclient.so-private wrappers (engine doesn't reference these
 //     but they're in the legacy export set — provide passthroughs) ──────────
 SHIM_EXPORT void Steam_RunCallbacks(HSteamPipe hSteamPipe, bool bGameServerCallbacks) {
     run_callbacks_pump(hSteamPipe, bGameServerCallbacks);
 }
-SHIM_EXPORT void Steam_RegisterInterfaceFuncs(void * /*hModule*/) { /* no-op: arm64 steamclient doesn't need this */ }
+SHIM_EXPORT void Steam_RegisterInterfaceFuncs(void *hModule) {
+    // Legacy v1.60 disasm: helper @ 0x5fd2 takes the module handle, dlsyms
+    // exactly three callback-pump entry points, and stores the resulting
+    // function pointers in globals for later use:
+    //   Steam_BGetCallback
+    //   Steam_FreeLastCallback
+    //   Steam_GetAPICallResult
+    // Our open_steamclient() already resolves these from steamclient.so
+    // directly, but if an external caller invokes this with a different
+    // module handle (e.g., a test harness that wants to override the
+    // pump), honor it by re-pointing the pumps at the new module.
+    if (!hModule) return;
+    Steam_BGetCallback_t bg = (Steam_BGetCallback_t)dlsym(hModule, "Steam_BGetCallback");
+    Steam_FreeLastCallback_t fl = (Steam_FreeLastCallback_t)dlsym(hModule, "Steam_FreeLastCallback");
+    Steam_GetAPICallResult_t gar = (Steam_GetAPICallResult_t)dlsym(hModule, "Steam_GetAPICallResult");
+    if (bg)  g_pSteam_BGetCallback = bg;
+    if (fl)  g_pSteam_FreeLastCallback = fl;
+    if (gar) g_pSteam_GetAPICallResult = gar;
+}
 SHIM_EXPORT HSteamUser Steam_GetHSteamUserCurrent() { return g_hSteamUser ? g_hSteamUser : g_hSteamUserGS; }
 
-// SteamRealPath — legacy path-resolution helper (the legacy lib's
-// disassembly shows it takes (pchInputPath, pchOutputBuf, cubBufSize) and
-// returns the resolved real path). Engine doesn't call this; we provide a
-// trivial passthrough copy so the symbol is present and harmless.
+// SteamRealPath — resolve a path to its canonical real path. Legacy
+// v1.60 disasm @ 0x2f3e: validates buffer size <= 4096, uses an
+// internal helper that performs realpath()-equivalent resolution. We
+// implement via libc realpath() directly, which is the standard
+// POSIX function and matches legacy semantics closely.
 SHIM_EXPORT int SteamRealPath(const char *pchInputPath, char *pchOutputBuf, int cubBufSize) {
     if (!pchInputPath || !pchOutputBuf || cubBufSize <= 0) return 0;
-    size_t n = strlen(pchInputPath);
+    // Legacy enforces a 4 KB ceiling on the output buffer (compares
+    // against 0x1000). Mirror that.
+    if (cubBufSize > 0x1000) return 0;
+    char resolved[PATH_MAX];
+    const char *r = realpath(pchInputPath, resolved);
+    if (!r) {
+        // realpath failure: legacy lib still copies the input verbatim
+        // so callers don't get an empty buffer. Mirror that.
+        size_t n = strlen(pchInputPath);
+        if ((int)n + 1 > cubBufSize) n = cubBufSize - 1;
+        memcpy(pchOutputBuf, pchInputPath, n);
+        pchOutputBuf[n] = '\0';
+        return (int)n;
+    }
+    size_t n = strlen(resolved);
     if ((int)n + 1 > cubBufSize) n = cubBufSize - 1;
-    memcpy(pchOutputBuf, pchInputPath, n);
+    memcpy(pchOutputBuf, resolved, n);
     pchOutputBuf[n] = '\0';
     return (int)n;
 }
