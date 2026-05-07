@@ -231,6 +231,20 @@ if (NOT TARGET bzip2)
 	add_subdirectory(../dep/bzip2 bzip2)
 endif()
 
+# AsmJit — multi-arch JIT codegen (x86_32, x86_64, aarch64). Built as a
+# static library here and linked into the engine. We slim it: drop
+# logging/text/builder/introspection (unused by delta_jit codepaths) and
+# foreign-arch backends (we only need codegen for the host arch).
+if (NOT TARGET asmjit)
+	set(ASMJIT_STATIC           ON  CACHE INTERNAL "")
+	set(ASMJIT_NO_FOREIGN       ON  CACHE INTERNAL "")
+	set(ASMJIT_NO_TEXT          ON  CACHE INTERNAL "")
+	set(ASMJIT_NO_LOGGING       ON  CACHE INTERNAL "")
+	set(ASMJIT_NO_BUILDER       ON  CACHE INTERNAL "")
+	set(ASMJIT_NO_INTROSPECTION ON  CACHE INTERNAL "")
+	add_subdirectory(../dep/asmjit asmjit)
+endif()
+
 if (NOT TARGET appversion)
 	add_custom_target(appversion DEPENDS COMMAND "${PROJECT_SOURCE_DIR}/version/appversion.sh" "${PROJECT_SOURCE_DIR}/..")
 endif()
@@ -292,6 +306,7 @@ target_link_libraries(engine PRIVATE
 	m
 	bzip2
 	steam_api
+	asmjit::asmjit
 )
 # Ensure the shim's output (libsteam_api.so) is built before the engine's
 # link step tries to find it via `-lsteam_api -L<lib/${ARCH_LIB_DIR}>`.
