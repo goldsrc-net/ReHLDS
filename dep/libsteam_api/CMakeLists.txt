@@ -22,7 +22,15 @@ cmake_minimum_required(VERSION 3.10)
 #     hardcoded "SteamClient023" — the SteamAPI_Init / slot-25 ABI break.
 #   - lib/linuxarm64/libsteam_api.so : was anniversary SDK 1.64 binary,
 #     same break as linux64. Valve never published a v1.60-era arm64 binary.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+# Honor the parent project's arch decision (ArchFlags.cmake already
+# resolved BUILD_AMD64, the aarch64 toolchain file, and the default
+# linux32 path into ARCH_LIB_DIR + ARCH_BITNESS_FLAG). On amd64 hosts
+# with -m32 the parent project targets linux32 even though the host's
+# CMAKE_SYSTEM_PROCESSOR remains "x86_64", so we can't decide from the
+# host triple alone.
+if(DEFINED ARCH_LIB_DIR)
+    set(SHIM_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/rehlds/lib/${ARCH_LIB_DIR}")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     set(SHIM_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/rehlds/lib/linuxarm64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
     set(SHIM_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/rehlds/lib/linux64")
@@ -59,6 +67,10 @@ target_compile_options(libsteam_api_shim PRIVATE
     -fvisibility=hidden
     -fvisibility-inlines-hidden
     -Wall -Wno-invalid-offsetof
+    ${ARCH_BITNESS_FLAG}
+)
+target_link_options(libsteam_api_shim PRIVATE
+    ${ARCH_BITNESS_FLAG}
 )
 
 target_include_directories(libsteam_api_shim PRIVATE
