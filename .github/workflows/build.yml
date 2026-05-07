@@ -368,6 +368,150 @@ jobs:
           name: linux32
           path: publish/*
 
+  linux-amd64:
+    name: 'Linux amd64'
+    runs-on: ubuntu-24.04
+    container: debian:11-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git rsync ca-certificates \
+            g++ gcc
+
+      - name: Configure
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build and Run unittests
+        run: |
+          rm -rf build && cmake -DBUILD_AMD64=ON -DCMAKE_BUILD_TYPE=Unittests -B build && cmake --build build -j$(nproc)
+          retVal=0
+          export LD_LIBRARY_PATH="rehlds/lib/linux64:$LD_LIBRARY_PATH"
+          ./build/rehlds/engine_i486 2> /dev/null > result.log || retVal=$?
+          while read line; do
+            if [[ ${line} == *"Warning in test"* ]] ; then
+              echo -e "\e[2;38m$line"
+            elif [[ ${line} == *"Failure in test"* ]] ; then
+              echo -e "\e[1;31m$line"
+            else
+              echo -e "\e[0;33m$line"
+            fi
+          done <<< $(cat result.log)
+
+          if [ $retVal -ne 0 ] && [ $retVal -ne 3 ]; then
+            echo -e "\e[30;41mExit code: $retVal\e[0m"
+            exit 1
+          else
+            echo -e "\e[30;43mExit code: $retVal\e[0m"
+          fi
+        shell: bash
+
+      - name: Build
+        run: |
+          rm -rf build && cmake -B build -DBUILD_AMD64=ON -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build -j$(nproc)
+
+      - name: Move files
+        run: |
+          mkdir -p publish/bin/linux64/valve/dlls
+
+          mv build/rehlds/engine_i486.so publish/bin/linux64/engine_i486.so
+          mv build/rehlds/dedicated/hlds_linux publish/bin/linux64/hlds_linux
+          mv build/rehlds/HLTV/Console/hltv publish/bin/linux64/hltv
+          mv build/rehlds/HLTV/Core/core.so publish/bin/linux64/core.so
+          mv build/rehlds/HLTV/Proxy/proxy.so publish/bin/linux64/proxy.so
+          mv build/rehlds/HLTV/DemoPlayer/demoplayer.so publish/bin/linux64/demoplayer.so
+          mv build/rehlds/HLTV/Director/director.so publish/bin/linux64/valve/dlls/director.so
+          mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linux64/filesystem_stdio.so
+          mv rehlds/lib/linux64/libsteam_api.so publish/bin/linux64/libsteam_api.so
+
+      - name: Deploy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux64
+          path: publish/*
+
+  linux-arm64:
+    name: 'Linux arm64'
+    # GitHub provides free ubuntu-24.04-arm runners for public repos. Native
+    # arm64 build is ~10x faster than QEMU. If the org disables arm64 runners,
+    # swap to ubuntu-24.04 + docker/setup-qemu-action + run inside an arm64
+    # container.
+    runs-on: ubuntu-24.04-arm
+    container: debian:11-slim
+
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git rsync ca-certificates \
+            g++ gcc
+
+      - name: Configure
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build and Run unittests
+        run: |
+          rm -rf build && cmake -DCMAKE_BUILD_TYPE=Unittests -B build && cmake --build build -j$(nproc)
+          retVal=0
+          export LD_LIBRARY_PATH="rehlds/lib/linuxarm64:$LD_LIBRARY_PATH"
+          ./build/rehlds/engine_i486 2> /dev/null > result.log || retVal=$?
+          while read line; do
+            if [[ ${line} == *"Warning in test"* ]] ; then
+              echo -e "\e[2;38m$line"
+            elif [[ ${line} == *"Failure in test"* ]] ; then
+              echo -e "\e[1;31m$line"
+            else
+              echo -e "\e[0;33m$line"
+            fi
+          done <<< $(cat result.log)
+
+          if [ $retVal -ne 0 ] && [ $retVal -ne 3 ]; then
+            echo -e "\e[30;41mExit code: $retVal\e[0m"
+            exit 1
+          else
+            echo -e "\e[30;43mExit code: $retVal\e[0m"
+          fi
+        shell: bash
+
+      - name: Build
+        run: |
+          rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            && cmake --build build -j$(nproc)
+
+      - name: Move files
+        run: |
+          mkdir -p publish/bin/linuxarm64/valve/dlls
+
+          mv build/rehlds/engine_i486.so publish/bin/linuxarm64/engine_i486.so
+          mv build/rehlds/dedicated/hlds_linux publish/bin/linuxarm64/hlds_linux
+          mv build/rehlds/HLTV/Console/hltv publish/bin/linuxarm64/hltv
+          mv build/rehlds/HLTV/Core/core.so publish/bin/linuxarm64/core.so
+          mv build/rehlds/HLTV/Proxy/proxy.so publish/bin/linuxarm64/proxy.so
+          mv build/rehlds/HLTV/DemoPlayer/demoplayer.so publish/bin/linuxarm64/demoplayer.so
+          mv build/rehlds/HLTV/Director/director.so publish/bin/linuxarm64/valve/dlls/director.so
+          mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linuxarm64/filesystem_stdio.so
+          mv rehlds/lib/linuxarm64/libsteam_api.so publish/bin/linuxarm64/libsteam_api.so
+
+      - name: Deploy artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxarm64
+          path: publish/*
+
   publish:
     name: 'Publish'
     runs-on: ubuntu-24.04
