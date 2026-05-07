@@ -693,7 +693,7 @@ DISPATCHFUNCTION GetDispatch(char *pname)
 	return NULL;
 }
 
-const char *FindAddressInTable(extensiondll_t *pDll, uint32 function)
+const char *FindAddressInTable(extensiondll_t *pDll, uintp function)
 {
 #ifdef _WIN32
 	for (int i = 0; i < pDll->functionCount; i++)
@@ -714,7 +714,7 @@ const char *FindAddressInTable(extensiondll_t *pDll, uint32 function)
 	return NULL;
 }
 
-uint32 FindNameInTable(extensiondll_t *pDll, const char *pName)
+uintp FindNameInTable(extensiondll_t *pDll, const char *pName)
 {
 #ifdef _WIN32
 	for (int i = 0; i < pDll->functionCount; i++)
@@ -724,9 +724,9 @@ uint32 FindNameInTable(extensiondll_t *pDll, const char *pName)
 			return pDll->functionTable[i].pFunction;
 		}
 	}
-	return NULL;
+	return 0;
 #else
-	return (uint32)dlsym(pDll->lDLLHandle, pName);
+	return (uintp)dlsym(pDll->lDLLHandle, pName);
 #endif // _WIN32
 }
 
@@ -747,12 +747,22 @@ NOBODY const char *ConvertNameToLocalPlatform(const char *pchInName);
 //	}
 //}
 
-uint32 EXT_FUNC FunctionFromName(const char *pName)
+uintp EXT_FUNC FunctionFromName(const char *pName)
 {
-	return 0; //TODO: do we really need to reverse it?
+	for (int i = 0; i < g_iextdllMac; i++)
+	{
+		uintp function = FindNameInTable(&g_rgextdll[i], pName);
+		if (function)
+		{
+			return function;
+		}
+	}
+
+	Con_Printf("Can't find function: %s\n", pName);
+	return 0;
 }
 
-const char* EXT_FUNC NameForFunction(uint32 function)
+const char* EXT_FUNC NameForFunction(uintp function)
 {
 	int i;
 	const char *pName;
@@ -766,7 +776,7 @@ const char* EXT_FUNC NameForFunction(uint32 function)
 		}
 	}
 
-	Con_Printf("Can't find address: %08lx\n", function);
+	Con_Printf("Can't find address: %p\n", (void *)function);
 	return NULL;
 }
 

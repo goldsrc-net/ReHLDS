@@ -35,7 +35,7 @@ const int MAX_EXTENSION_DLL = 50;
 
 typedef struct functiontable_s
 {
-	uint32 pFunction;
+	uintp pFunction;
 	char *pFunctionName;
 } functiontable_t;
 
