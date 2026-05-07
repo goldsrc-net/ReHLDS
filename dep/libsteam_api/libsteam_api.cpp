@@ -106,6 +106,26 @@ Steam_BGetCallback_t      g_pSteam_BGetCallback = nullptr;
 Steam_FreeLastCallback_t  g_pSteam_FreeLastCallback = nullptr;
 Steam_GetAPICallResult_t  g_pSteam_GetAPICallResult = nullptr;
 
+// Breakpad helper trampolines dlsym'd from steamclient.so. The legacy v1.60
+// libsteam_api.so resolves these on demand (see its disasm @ 0x7ec3 for
+// SetBreakpadAppID, @ 0x7fa4 for WriteMiniDump, @ 0x7f69 for
+// SetMiniDumpComment) and proxies through. Anniversary and pre-anniversary
+// steamclient.so both export the Breakpad_Steam* family. We resolve them
+// once at open_steamclient() time and cache. NULL is acceptable — older
+// (or non-standard) steamclient.so builds may not export them, in which
+// case our proxy is a soft no-op rather than a crash.
+typedef void (*Breakpad_SetAppID_t)(uint32 unAppID);
+typedef int  (*Breakpad_WriteMiniDumpExInfo_t)(uint32 uStructuredExceptionCode,
+                                               void *pvExceptionInfo,
+                                               uint32 uBuildID);
+typedef void (*Breakpad_SetComment_t)(const char *pszComment);
+typedef void (*Breakpad_SetSteamID_t)(uint64 ulSteamID);
+Breakpad_SetAppID_t            g_pBreakpad_SteamSetAppID = nullptr;
+Breakpad_WriteMiniDumpExInfo_t g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId = nullptr;
+Breakpad_SetComment_t          g_pBreakpad_SteamWriteMiniDumpSetComment = nullptr;
+Breakpad_SetSteamID_t          g_pBreakpad_SteamSetSteamID = nullptr;
+uint32                         g_unBreakpadAppID = 0;
+
 // Client-side state (set by SteamAPI_Init)
 ISteamClient    *g_pSteamClient = nullptr;
 HSteamPipe       g_hSteamPipe = 0;
@@ -214,6 +234,19 @@ bool ensure_steamclient_loaded() {
     g_pSteam_BGetCallback = (Steam_BGetCallback_t)dlsym(h, "Steam_BGetCallback");
     g_pSteam_FreeLastCallback = (Steam_FreeLastCallback_t)dlsym(h, "Steam_FreeLastCallback");
     g_pSteam_GetAPICallResult = (Steam_GetAPICallResult_t)dlsym(h, "Steam_GetAPICallResult");
+
+    // Breakpad/minidump trampolines. These are exported by both legacy and
+    // anniversary steamclient.so; we resolve them here so the proxy
+    // exports below can call through directly. Failures (NULL) are tolerated
+    // — proxies just become no-ops on builds of steamclient.so that don't
+    // expose them.
+    g_pBreakpad_SteamSetAppID = (Breakpad_SetAppID_t)dlsym(h, "Breakpad_SteamSetAppID");
+    g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId =
+        (Breakpad_WriteMiniDumpExInfo_t)dlsym(h, "Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId");
+    g_pBreakpad_SteamWriteMiniDumpSetComment =
+        (Breakpad_SetComment_t)dlsym(h, "Breakpad_SteamWriteMiniDumpSetComment");
+    g_pBreakpad_SteamSetSteamID = (Breakpad_SetSteamID_t)dlsym(h, "Breakpad_SteamSetSteamID");
+
     if (!g_pCreateInterface) {
         fprintf(stderr, "libsteam_api: steamclient.so missing CreateInterface\n");
         dlclose(h);
@@ -222,6 +255,11 @@ bool ensure_steamclient_loaded() {
     g_hSteamClientLib = h;
     logf("steamclient.so loaded: CreateInterface=%p Steam_BGetCallback=%p Steam_FreeLastCallback=%p",
          (void*)g_pCreateInterface, (void*)g_pSteam_BGetCallback, (void*)g_pSteam_FreeLastCallback);
+    logf("breakpad trampolines: SetAppID=%p WriteMiniDump=%p SetComment=%p SetSteamID=%p",
+         (void*)g_pBreakpad_SteamSetAppID,
+         (void*)g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId,
+         (void*)g_pBreakpad_SteamWriteMiniDumpSetComment,
+         (void*)g_pBreakpad_SteamSetSteamID);
     return true;
 }
 
@@ -423,10 +461,43 @@ SHIM_EXPORT void SteamAPI_UnregisterCallResult(CCallbackBase *pCallback, SteamAP
     }
 }
 
-// ─── Crash handler / minidump (no-ops on dedicated server) ──────────────────
-SHIM_EXPORT void SteamAPI_WriteMiniDump(uint32 /*c*/, void * /*ei*/, uint32 /*b*/) {}
-SHIM_EXPORT void SteamAPI_SetMiniDumpComment(const char * /*msg*/) {}
-SHIM_EXPORT void SteamAPI_SetBreakpadAppID(uint32 /*unAppID*/) {}
+// ─── Crash handler / minidump ───────────────────────────────────────────────
+//
+// These mirror the legacy v1.60 libsteam_api.so's behavior of resolving
+// Breakpad_Steam* helpers from steamclient.so on demand and proxying
+// through. If the dlsym lookup at open_steamclient() time returned NULL
+// (older or non-standard steamclient.so build that doesn't expose the
+// helper), the proxy degrades to a soft no-op rather than a crash.
+//
+// Exception: SteamAPI_UseBreakpadCrashHandler is left as a no-op. The
+// legacy lib's implementation installs SIGSEGV/SIGABRT handlers and drives
+// Breakpad_SteamMiniDumpInit, with significant intermediate state. The
+// engine works fine without Steam-side crash aggregation — it just falls
+// back to OS core dumps. Implementing the full handler isn't required for
+// gameplay, VAC, or any observable functionality, and replicating it
+// faithfully would require ~100 lines of signal-handler glue.
+SHIM_EXPORT void SteamAPI_WriteMiniDump(uint32 uStructuredExceptionCode,
+                                        void *pvExceptionInfo, uint32 uBuildID) {
+    if (g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId)
+        g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId(
+            uStructuredExceptionCode, pvExceptionInfo, uBuildID);
+}
+
+SHIM_EXPORT void SteamAPI_SetMiniDumpComment(const char *pszComment) {
+    if (g_pBreakpad_SteamWriteMiniDumpSetComment)
+        g_pBreakpad_SteamWriteMiniDumpSetComment(pszComment);
+}
+
+SHIM_EXPORT void SteamAPI_SetBreakpadAppID(uint32 unAppID) {
+    if (g_unBreakpadAppID != unAppID) {
+        if (g_unBreakpadAppID == 0)
+            fprintf(stderr, "Setting breakpad minidump AppID = %u\n", unAppID);
+        g_unBreakpadAppID = unAppID;
+    }
+    if (unAppID && g_pBreakpad_SteamSetAppID)
+        g_pBreakpad_SteamSetAppID(unAppID);
+}
+
 SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char * /*v*/, const char * /*d*/,
         const char * /*t*/, bool /*full*/, void * /*ctx*/, PFNPreMinidumpCallback /*cb*/) {}
 
