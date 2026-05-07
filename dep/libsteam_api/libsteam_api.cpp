@@ -152,6 +152,15 @@ ISteamNetworking *g_pSteamGameServerNetworking = nullptr;
 ISteamGameServerStats *g_pSteamGameServerStats = nullptr;
 ISteamHTTP      *g_pSteamGameServerHTTP = nullptr;
 ISteamApps      *g_pSteamGameServerApps = nullptr;
+// Mode argument captured from SteamGameServer_Init. Legacy lib stores
+// this at [ebx+0x14dc] and uses it in SteamGameServer_BSecure /
+// SteamGameServer_GetSteamID to short-circuit to "false" / "0" when
+// mode == eServerModeNoAuthentication (1, LAN-only).
+EServerMode      g_eServerModeGS = eServerModeInvalid;
+// SteamAPI_SetTryCatchCallbacks flag. Legacy stores at [ecx+0x1a0].
+// Not currently consulted in our pump but tracked for parity so any
+// reflective getter would see the right value.
+bool             g_bTryCatchCallbacks = false;
 
 bool             g_bDebugLog = false;
 
@@ -414,18 +423,26 @@ SHIM_EXPORT bool SteamAPI_RestartAppIfNecessary(uint32 /*unOwnAppID*/) {
 }
 
 SHIM_EXPORT const char *SteamAPI_GetSteamInstallPath() {
-    static char path[1024] = {0};
-    if (path[0]) return path;
-    const char *home = getenv("HOME");
-    if (home) snprintf(path, sizeof(path), "%s/.steam/steam", home);
-    return path;
+    // Legacy v1.60 libsteam_api.so's SteamAPI_GetSteamInstallPath
+    // (disasm @ 0x7866) returns the literal "." — i.e., the cwd of the
+    // running process. We mirror that exactly. The function is not
+    // called by any code path in ReHLDS, but parity keeps the shim a
+    // strict drop-in.
+    return ".";
 }
 
 SHIM_EXPORT HSteamPipe SteamAPI_GetHSteamPipe()  { return g_hSteamPipe; }
 SHIM_EXPORT HSteamUser SteamAPI_GetHSteamUser()  { return g_hSteamUser; }
 SHIM_EXPORT HSteamPipe GetHSteamPipe()           { return g_hSteamPipe; }
 SHIM_EXPORT HSteamUser GetHSteamUser()           { return g_hSteamUser; }
-SHIM_EXPORT void SteamAPI_SetTryCatchCallbacks(bool /*b*/) { /* no-op */ }
+SHIM_EXPORT void SteamAPI_SetTryCatchCallbacks(bool bTryCatchCallbacks) {
+    // Legacy v1.60 stores this flag at [ecx+0x1a0] (disasm @ 0x4ae2).
+    // It controls whether the lib wraps callback dispatch in a
+    // try/catch, originally for diagnostic reasons. Our pump doesn't
+    // currently use it, but tracking the value matches legacy's
+    // observable state for reflective callers.
+    g_bTryCatchCallbacks = bTryCatchCallbacks;
+}
 
 // ─── Callback registration ──────────────────────────────────────────────────
 SHIM_EXPORT void SteamAPI_RegisterCallback(CCallbackBase *pCallback, int iCallback) {
@@ -527,6 +544,7 @@ SHIM_EXPORT bool SteamGameServer_Init(uint32 unIP, uint16 usSteamPort, uint16 us
     ISteamClient *sc = acquire_steamclient012();
     if (!sc) return false;
     g_pSteamClientGameServer = sc;
+    g_eServerModeGS = eServerMode; // captured for BSecure/GetSteamID short-circuit
 
     // Mirror the legacy x86 v1.60 lib's flow (verified by objdump on
     // lib/linux32/libsteam_api.so:9924, internal helper at 0x95e4):
@@ -641,16 +659,30 @@ SHIM_EXPORT void SteamGameServer_RunCallbacks() {
 }
 
 SHIM_EXPORT bool SteamGameServer_BSecure() {
+    // Legacy disasm @ 0x9a4d short-circuits to false when
+    // eServerMode == eServerModeNoAuthentication (1, LAN). Otherwise
+    // it forwards to ISteamGameServer::BSecure (slot 10 in the v011
+    // vtable). We mirror both semantics.
+    if (g_eServerModeGS == eServerModeNoAuthentication) return false;
     return g_pSteamGameServerInterface ? g_pSteamGameServerInterface->BSecure() : false;
 }
 
 SHIM_EXPORT uint64 SteamGameServer_GetSteamID() {
+    // Same eServerMode short-circuit as BSecure (legacy disasm @ 0x9a82).
+    // In LAN mode the server has no Steam ID, so return 0 without
+    // calling into Steam.
+    if (g_eServerModeGS == eServerModeNoAuthentication) return 0;
     if (!g_pSteamGameServerInterface) return 0;
     return g_pSteamGameServerInterface->GetSteamID().ConvertToUint64();
 }
 
 SHIM_EXPORT uint32 SteamGameServer_GetIPCCallCount() {
-    return g_pSteamClientGameServer ? g_pSteamClientGameServer->GetIPCCallCount() : 0;
+    // Legacy disasm @ 0x9ad9 calls slot 15 of ISteamUtils
+    // (`call [eax+0x3c]` on `[ebx+0x14cc]` = ISteamUtils ptr).
+    // Earlier versions of this shim called ISteamClient::GetIPCCallCount
+    // (slot 20) instead, which is a different counter on a different
+    // interface. Match legacy by routing through ISteamUtils.
+    return g_pSteamGameServerUtils ? g_pSteamGameServerUtils->GetIPCCallCount() : 0;
 }
 
 SHIM_EXPORT HSteamPipe SteamGameServer_GetHSteamPipe()  { return g_hSteamPipeGS; }
