@@ -532,7 +532,17 @@ void SV_AddLinksToPM_(areanode_t *node, float *pmove_mins, float *pmove_maxs)
 
 	for (l = node->solid_edicts.next; l != &node->solid_edicts; l = next)
 	{
-		check = (edict_t *)&l[-1];
+		// Was: `check = (edict_t *)&l[-1];` — relied on
+		// sizeof(link_t) == offsetof(edict_t, area) which holds on x86-32
+		// (both = 8) but breaks on 64-bit where sizeof(link_t) = 16
+		// (two 8-byte pointers) while offsetof(edict_t, area) is still 8.
+		// The buggy form walked back 16 bytes instead of 8 → check pointed
+		// 8 bytes BEFORE the actual edict, into adjacent memory →
+		// NUM_FOR_EDICT(check) failed with "bad pointer" once a player
+		// connected and SV_AddLinksToPM_ tried to enumerate area-node
+		// edict pointers. Use the existing EDICT_FROM_AREA macro which
+		// uses offsetof(edict_t, area) explicitly and works on any arch.
+		check = EDICT_FROM_AREA(l);
 		next = l->next;
 		if (check->v.groupinfo)
 		{
