@@ -293,6 +293,13 @@ target_link_libraries(engine PRIVATE
 	bzip2
 	steam_api
 )
+# Ensure the shim's output (libsteam_api.so) is built before the engine's
+# link step tries to find it via `-lsteam_api -L<lib/${ARCH_LIB_DIR}>`.
+# The TARGET guard keeps unittest builds (which don't enable the shim
+# subdirectory) building cleanly.
+if(TARGET libsteam_api_shim)
+	add_dependencies(engine libsteam_api_shim)
+endif()
 # asmlib (Agner Fog's hand-tuned x86 asm string lib) is shipped here only as
 # libaelf32.a. Skip on amd64/aarch64; strtools.h falls through to libc when
 # ASMLIB_H is undefined.

@@ -1,6 +1,15 @@
 **/build
 **/build-amd64
 **/build-arm64
+**/build-linux32
+
+# libsteam_api.so is built from source by dep/libsteam_api/ on every CI run.
+# The output paths are tracked locations (downstream link expects them at
+# rehlds/lib/${ARCH_LIB_DIR}/libsteam_api.so), but the binaries themselves
+# are build artifacts and should not be committed.
+rehlds/lib/linux32/libsteam_api.so
+rehlds/lib/linux64/libsteam_api.so
+rehlds/lib/linuxarm64/libsteam_api.so
 *.iml
 *.bat
 *.log
