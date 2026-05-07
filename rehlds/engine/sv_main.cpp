@@ -1406,7 +1406,10 @@ void SV_WriteSpawn(sizebuf_t *msg)
 		InitEntityDLLFields(sv_player);
 
 		sv_player->v.colormap = NUM_FOR_EDICT(sv_player);
-		sv_player->v.netname = host_client->name - pr_strings;
+		// 64-bit: host_client->name lives inside g_psvs.clients[] in a different
+		// memory region from pr_strings. ptrdiff truncates to garbage. Allocate
+		// in the engine StrPool instead.
+		sv_player->v.netname = AllocEngineString(host_client->name);
 
 		if (host_client->proxy)
 			sv_player->v.flags |= FL_PROXY;
@@ -6368,8 +6371,26 @@ int SV_SpawnServer(qboolean bIsDemo, char *server, char *startspot)
 	else
 		g_psv.startspot[0] = 0;
 
-	pr_strings = gNullString;
-	gGlobalVariables.pStringBase = gNullString;
+	// Anchor pr_strings to the start of the Ed_StrPool buffer so every
+	// string allocated via Ed_StrPool_Alloc (which is what ED_NewString
+	// uses under REHLDS_FIXES) lies at an offset >= 0 from pr_strings,
+	// bounded by the pool's 128 KB capacity. On 64-bit hosts, the original
+	// `pr_strings = gNullString` (in .rodata, ~0x55555555_XXXX) combined
+	// with ED_NewString returning pointers from the StrPool buffer
+	// (hunk-allocated, ~0x7ffff7XX_XXXX) caused AllocEngineString's
+	// `ED_NewString(s) - pr_strings` cast-to-int to truncate a ~47-TB
+	// ptrdiff to garbage, which the gamedll wrote into pev->classname;
+	// the engine later added it back to pr_strings, producing a kernel-
+	// space canonical address → SIGSEGV in dlsym during ED_ParseEdict.
+	// Pointing pr_strings at the StrPool's start keeps the diff within
+	// the pool size, fitting in int. Index 0 of pr_strings reads as '\0'
+	// (the StrPool reserves byte 0 in Ed_StrPool_Init), preserving the
+	// "empty string at offset 0" contract that gNullString provided.
+	// On 32-bit this is functionally equivalent (int already fits any
+	// pointer difference).
+	extern sizebuf_t g_EdStringPool_Hunk;
+	pr_strings = (char *)g_EdStringPool_Hunk.data;
+	gGlobalVariables.pStringBase = pr_strings;
 
 	if (g_psvs.maxclients == 1)
 		Cvar_SetValue("sv_clienttrace", 1.0);
@@ -6529,7 +6550,13 @@ int SV_SpawnServer(qboolean bIsDemo, char *server, char *startspot)
 
 	g_psv.edicts->free = FALSE;
 	g_psv.edicts->v.modelindex = 1;
-	g_psv.edicts->v.model = (size_t)g_psv.worldmodel - (size_t)pr_strings;
+	// 64-bit: the original `(size_t)g_psv.worldmodel - (size_t)pr_strings`
+	// was casting a model_s* pointer through string_t — a 32-bit hack that
+	// happened to encode the pointer's value in the offset on x86-32 but
+	// produces garbage on 64-bit. The semantically-correct equivalent is
+	// the worldmodel's name string, allocated through AllocEngineString
+	// so the offset stays within the StrPool's bounded range.
+	g_psv.edicts->v.model = AllocEngineString(g_psv.worldmodel->name);
 	g_psv.edicts->v.solid = SOLID_BSP;
 	g_psv.edicts->v.movetype = MOVETYPE_PUSH;
 
@@ -6539,8 +6566,8 @@ int SV_SpawnServer(qboolean bIsDemo, char *server, char *startspot)
 		gGlobalVariables.coop_ = coop.value;
 
 	gGlobalVariables.serverflags = g_psvs.serverflags;
-	gGlobalVariables.mapname = (size_t)g_psv.name - (size_t)pr_strings;
-	gGlobalVariables.startspot = (size_t)g_psv.startspot - (size_t)pr_strings;
+	gGlobalVariables.mapname = AllocEngineString(g_psv.name);
+	gGlobalVariables.startspot = AllocEngineString(g_psv.startspot);
 	SV_SetMoveVars(&sv_movevars);
 
 	return 1;

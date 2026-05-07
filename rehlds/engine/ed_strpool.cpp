@@ -52,13 +52,22 @@ void Ed_StrPool_Init() {
 
 	g_EdStringPool_Hunk.maxsize = 128 * 1024;
 	g_EdStringPool_Hunk.data = (byte*) Hunk_AllocName(g_EdStringPool_Hunk.maxsize, "Ed_StrPool");
-	g_EdStringPool_Hunk.cursize = 0;
+	// Reserve byte 0 of the buffer as the empty-string sentinel.
+	// SV_SpawnServer anchors pr_strings to data[0], so on 64-bit hosts
+	// pr_strings + 0 must read '\0' (preserving the "string at offset 0
+	// is the empty string" contract that the legacy gNullString provided).
+	g_EdStringPool_Hunk.data[0] = '\0';
+	g_EdStringPool_Hunk.cursize = 1;
 	g_EdStringPool_Hunk.buffername = "Ed_StrPool";
 	g_EdStringPool_Hunk.flags = SIZEBUF_ALLOW_OVERFLOW;
 }
 
 void Ed_StrPool_Reset() {
-	g_EdStringPool_Hunk.cursize = 0;
+	// Preserve byte 0 as the empty-string sentinel (see Ed_StrPool_Init).
+	g_EdStringPool_Hunk.cursize = 1;
+	if (g_EdStringPool_Hunk.data) {
+		g_EdStringPool_Hunk.data[0] = '\0';
+	}
 	g_EdStringPool_Hunk.flags = SIZEBUF_ALLOW_OVERFLOW;
 	g_EdStringPool.clear();
 }
