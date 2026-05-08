@@ -2,7 +2,7 @@ name: C/C++ CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, 64bit]
     paths-ignore:
       - '**.md'
       - '.github/**'
@@ -515,13 +515,23 @@ jobs:
   publish:
     name: 'Publish'
     runs-on: ubuntu-24.04
-    needs: [windows, testdemos, linux]
+    needs: [windows, testdemos, linux, linux-amd64, linux-arm64]
 
     steps:
-      - name: Deploying linux artifacts
+      - name: Deploying linux i386 artifacts
         uses: actions/download-artifact@v4
         with:
           name: linux32
+
+      - name: Deploying linux amd64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux64
+
+      - name: Deploying linux arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linuxarm64
 
       - name: Deploying windows artifacts
         uses: actions/download-artifact@v4
