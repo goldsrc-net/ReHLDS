@@ -412,12 +412,15 @@ qboolean SV_IsPlayerIndex(int index)
 	return (index >= 1 && index <= g_psvs.maxclients);
 }
 
-#ifdef _WIN32
+// On Win32 (x86) the original swds.dll's calling convention preserved ecx/edx
+// across SV_IsPlayerIndex calls. msvc2013+ doesn't, so the original code
+// wraps the call in a naked function that pushes/pops them. That __asm form
+// only compiles on x86 — on x64 there's no register-preservation problem
+// (System V/Win64 ABI doesn't reuse ecx/edx as scratch the same way) and
+// MSVC dropped __asm entirely. Use the C++ fallback on every non-x86 build.
+#if defined(_WIN32) && (defined(_M_IX86) || defined(_X86_))
 qboolean __declspec(naked) SV_IsPlayerIndex_wrapped(int index)
 {
-	// Original SV_IsPlayerIndex in swds.dll doesn't modify ecx nor edx.
-	// During the compilation of original swds.dll compiler was assuming that these registers wouldn't be modified during call to SV_IsPlayerIndex().
-	// This is not true for code produced by msvc2013 (which uses ecx even in Release config). That's why we need a wrapper here that preserves ecx and edx before call to reversed SV_IsPlayerIndex().
 	__asm
 	{
 		mov eax, dword ptr[esp + 4];
@@ -431,12 +434,12 @@ qboolean __declspec(naked) SV_IsPlayerIndex_wrapped(int index)
 		retn;
 	}
 }
-#else // _WIN32
+#else
 qboolean SV_IsPlayerIndex_wrapped(int index)
 {
 	return SV_IsPlayerIndex(index);
 }
-#endif // _WIN32
+#endif
 
 void SV_ClearPacketEntities(client_frame_t *frame)
 {

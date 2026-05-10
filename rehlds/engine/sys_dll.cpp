@@ -192,9 +192,17 @@ enginefuncs_t g_engfuncsExportedToDlls = {
 };
 
 #ifdef _WIN32
+// MSVC inline `__asm { fnstenv ... }` is x86-only; x64 dropped the syntax.
+// On x64 there's also no x87 FPU control to fiddle with — float math goes
+// through SSE2 unconditionally. Gate the FPU helpers so they compile on
+// both Win32 (x86, original behavior) and Win64 (no-op).
+#if defined(_M_IX86) || defined(_X86_)
+#  define HAS_X87_INLINE_ASM 1
+#endif
+
 void Sys_SetupFPUOptions()
 {
-#ifndef __SSE__
+#if defined(HAS_X87_INLINE_ASM) && !defined(__SSE__)
 	static uint8 fpuOpts[32];
 
 	__asm { fnstenv byte ptr fpuOpts }
@@ -205,7 +213,7 @@ void Sys_SetupFPUOptions()
 
 void Sys_InitFPUControlWords()
 {
-#ifndef __SSE__
+#if defined(HAS_X87_INLINE_ASM) && !defined(__SSE__)
 	int fpucw = 0;
 	__asm { fnstcw fpucw }
 
@@ -264,7 +272,7 @@ void __cdecl Sys_InitHardwareTimer()
 
 int g_SavedFPUCW1 = 0;
 void Sys_FPUCW_Push_Prec64() {
-#ifndef __SSE__
+#if defined(HAS_X87_INLINE_ASM) && !defined(__SSE__)
 	uint16 tmp = g_FPUCW_Mask_Prec_64Bit;
 	__asm { fnstcw  g_SavedFPUCW1 }
 	__asm { fldcw tmp }
@@ -272,7 +280,7 @@ void Sys_FPUCW_Push_Prec64() {
 }
 
 void Sys_FPUCW_Pop_Prec64() {
-#ifndef __SSE__
+#if defined(HAS_X87_INLINE_ASM) && !defined(__SSE__)
 	uint16 tmp = g_SavedFPUCW1;
 	__asm { fldcw tmp }
 #endif

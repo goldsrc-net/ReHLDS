@@ -40,8 +40,17 @@
 #define MAX_PATH  260
 #endif
 
-// Used to step into the debugger
+// Used to step into the debugger.
+// MSVC dropped inline `__asm { int 3 }` on x64 (and other non-x86 archs);
+// __debugbreak() is the cross-arch intrinsic and works back to VC6.
+// Keep the original __asm form on x86 for verbatim parity with the
+// upstream build; switch to the intrinsic everywhere else (Win64,
+// arm64, GCC where it's also recognized as a builtin).
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_X86_)) && !defined(_M_X64) && !defined(_M_ARM64)
 #define  DebuggerBreak()  __asm { int 3 }
+#else
+#define  DebuggerBreak()  __debugbreak()
+#endif
 
 // C functions for external declarations that call the appropriate C++ methods
 #ifndef EXPORT
