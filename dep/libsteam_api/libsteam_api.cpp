@@ -65,15 +65,29 @@
 //
 // SHIM_EXPORT marks a function for export from the produced shared object.
 // SHIM_DATA_ATTR is the platform-specific export attribute used for data
-// definitions; data exports are wrapped in `extern "C" { ... }` block form
-// to give them C linkage without GCC interpreting the line as an
-// `extern T x = init;` (which triggers `-Winitialized-extern`-style
-// warnings under -Wall). The Windows build additionally drives a .def
-// file (dep/libsteam_api/exports.def) which is the authoritative export
-// surface — dllexport here is for symbol-table cross-references.
+// definitions.
+//
+// On Windows the shim is built with STEAM_API_NODLL, which makes the SDK
+// header's S_API macro expand to plain `extern "C"` (no dllimport on
+// declarations). Our SHIM_EXPORT must match that linkage exactly —
+// adding __declspec(dllexport) here would produce C2375 "redefinition;
+// different linkage" against the header's forward declarations. So on
+// Windows SHIM_EXPORT is also plain `extern "C"`, and the export surface
+// is driven entirely by dep/libsteam_api/exports.def (which lists the
+// 56 legacy Win32 names + g_pSteamClientGameServer marked DATA).
+//
+// On POSIX the SDK header's S_API expands to `extern "C"` too (no
+// STEAM_API_EXPORTS), and we additionally apply
+// __attribute__((visibility("default"))) so the linker keeps the symbol
+// in .dynsym even though our build hides everything else by default
+// (-fvisibility=hidden in CMakeLists.txt).
+//
+// Data exports are wrapped in `extern "C" { ... }` block form to avoid
+// a GCC quirk that emits a warning when an `extern "C" attr T x = init;`
+// declaration appears at namespace scope.
 #ifdef _WIN32
-#  define SHIM_EXPORT     extern "C" __declspec(dllexport)
-#  define SHIM_DATA_ATTR  __declspec(dllexport)
+#  define SHIM_EXPORT     extern "C"
+#  define SHIM_DATA_ATTR  /* exported via exports.def DATA entry */
 #else
 #  define SHIM_EXPORT     extern "C" __attribute__((visibility("default")))
 #  define SHIM_DATA_ATTR  __attribute__((visibility("default")))
