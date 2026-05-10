@@ -33,13 +33,20 @@
 #include <cstdarg>
 #include <cstdint>
 #include <climits>
-#include <pthread.h>
-#include <unistd.h>
-#include <dlfcn.h>
-#include <signal.h>
-#include <sys/stat.h>
 #include <vector>
 #include <mutex>
+
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  define NOMINMAX
+#  include <windows.h>
+#  include <stdlib.h>      // _fullpath, _MAX_PATH
+#else
+#  include <unistd.h>
+#  include <dlfcn.h>
+#  include <signal.h>
+#  include <sys/stat.h>
+#endif
 
 // We pull in the in-tree SDK headers ONLY for type definitions (HSteamPipe,
 // HSteamUser, ISteamClient class shape, callback parameter structs, etc.).
@@ -54,13 +61,62 @@
 #include "steam/steam_api.h"
 #include "steam/steam_gameserver.h"
 
+// ─── Cross-platform export macros ───────────────────────────────────────────
+//
+// SHIM_EXPORT marks a function for export from the produced shared object.
+// SHIM_DATA_ATTR is the platform-specific export attribute used for data
+// definitions; data exports are wrapped in `extern "C" { ... }` block form
+// to give them C linkage without GCC interpreting the line as an
+// `extern T x = init;` (which triggers `-Winitialized-extern`-style
+// warnings under -Wall). The Windows build additionally drives a .def
+// file (dep/libsteam_api/exports.def) which is the authoritative export
+// surface — dllexport here is for symbol-table cross-references.
+#ifdef _WIN32
+#  define SHIM_EXPORT     extern "C" __declspec(dllexport)
+#  define SHIM_DATA_ATTR  __declspec(dllexport)
+#else
+#  define SHIM_EXPORT     extern "C" __attribute__((visibility("default")))
+#  define SHIM_DATA_ATTR  __attribute__((visibility("default")))
+#endif
+
+// ─── Module-loader portability wrapper ──────────────────────────────────────
+//
+// shim_module_t is a generic handle. shim_module_load opens a shared
+// object/DLL by path; shim_module_symbol resolves a name; shim_module_unload
+// releases the handle. On POSIX these are dlopen/dlsym/dlclose; on Windows
+// they are LoadLibraryA / GetProcAddress / FreeLibrary.
+#ifdef _WIN32
+typedef HMODULE shim_module_t;
+static inline shim_module_t shim_module_load(const char *path)
+    { return ::LoadLibraryA(path); }
+static inline void *shim_module_symbol(shim_module_t h, const char *name)
+    { return reinterpret_cast<void *>(::GetProcAddress(h, name)); }
+static inline void shim_module_unload(shim_module_t h)
+    { if (h) ::FreeLibrary(h); }
+// Default name for the steamclient module. Steam ships separate 32-/64-bit
+// DLLs on Windows (steamclient.dll vs steamclient64.dll); pick per arch.
+#  ifdef _WIN64
+#    define STEAMCLIENT_DEFAULT_NAME "steamclient64.dll"
+#  else
+#    define STEAMCLIENT_DEFAULT_NAME "steamclient.dll"
+#  endif
+#else
+typedef void *shim_module_t;
+static inline shim_module_t shim_module_load(const char *path)
+    { return ::dlopen(path, RTLD_NOW); }
+static inline void *shim_module_symbol(shim_module_t h, const char *name)
+    { return ::dlsym(h, name); }
+static inline void shim_module_unload(shim_module_t h)
+    { if (h) ::dlclose(h); }
+#  define STEAMCLIENT_DEFAULT_NAME "steamclient.so"
+#endif
+
 // g_pSteamClientGameServer is referenced by CSteamGameServerAPIContext::Init()
 // in the inline header — must be exported as a global object symbol (B), not
 // a function. Declared at file scope with extern "C" + default visibility so
 // the linker emits a global symbol in .bss/.data with no name mangling.
 extern "C" {
-    __attribute__((visibility("default")))
-    ISteamClient *g_pSteamClientGameServer = nullptr;
+    SHIM_DATA_ATTR ISteamClient *g_pSteamClientGameServer = nullptr;
 }
 
 // ─── Version string contract (the v1.60 ABI we lock to) ─────────────────────
@@ -85,10 +141,13 @@ constexpr const char *kVerSteamUnifiedMessages   = "STEAMUNIFIEDMESSAGES_INTERFA
 constexpr const char *kVerSteamUserStats         = "STEAMUSERSTATS_INTERFACE_VERSION011";
 constexpr const char *kVerSteamContentServer     = "SteamContentServer002";
 
-// Version banner exposed via dlsym so the engine (or installer scripts) can
-// confirm they got the right shim and not a drop-in anniversary lib.
-extern "C" __attribute__((visibility("default")))
-const char kRehldsLibsteamApiVersion[] = "v1.60.88.17-rehlds-shim";
+// Version banner exposed via dlsym/GetProcAddress so the engine (or installer
+// scripts) can confirm they got the right shim and not a drop-in anniversary lib.
+// Kept inside this anonymous namespace + extern "C" — matches the legacy
+// shim's layout. Sticking to a single declaration (not bracket form) keeps
+// GCC from emitting a `visibility attribute ignored` warning that fires
+// when this style is used outside a namespace.
+extern "C" SHIM_DATA_ATTR const char kRehldsLibsteamApiVersion[] = "v1.60.88.17-rehlds-shim";
 }
 
 // ─── Common steamclient.so handle + entry points ────────────────────────────
@@ -102,7 +161,7 @@ typedef bool  (*Steam_GetAPICallResult_t)(HSteamPipe hSteamPipe, SteamAPICall_t 
 
 // CallbackMsg_t is already declared in isteamuser.h at file scope; we use that one.
 
-void                     *g_hSteamClientLib = nullptr;
+shim_module_t             g_hSteamClientLib = nullptr;
 CreateInterfaceFn         g_pCreateInterface = nullptr;
 Steam_BGetCallback_t      g_pSteam_BGetCallback = nullptr;
 Steam_FreeLastCallback_t  g_pSteam_FreeLastCallback = nullptr;
@@ -209,32 +268,100 @@ void logf(const char *fmt, ...) {
 }
 
 bool file_exists(const char *path) {
+    if (!path || !*path) return false;
+#ifdef _WIN32
+    DWORD attr = ::GetFileAttributesA(path);
+    return attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY);
+#else
     struct stat st;
-    return path && *path && stat(path, &st) == 0;
+    return stat(path, &st) == 0;
+#endif
 }
 
-// Search for steamclient.so. Mirrors the legacy lib's logic, plus arm64
-// fallback paths (~/.steam/sdkarm64, ~/.steam/steam/linuxarm64). Honors
-// $STEAM_API_DLOPEN_FORCE to override entirely.
-void *open_steamclient() {
-    const char *force = getenv("STEAM_API_DLOPEN_FORCE");
-    if (force && *force) {
-        logf("STEAM_API_DLOPEN_FORCE=%s", force);
-        void *h = dlopen(force, RTLD_NOW);
+// Search for the steamclient module. On POSIX mirrors the legacy lib's
+// $HOME/.steam/sdk{32,64,arm64} probe order plus the loader's default search;
+// on Windows reads HKEY_CURRENT_USER\Software\Valve\Steam\SteamPath and
+// probes for steamclient{,64}.dll under the standard subdirs.
+//
+// The override env var is STEAM_API_DLOPEN_FORCE on POSIX (legacy name kept
+// for parity with the original Linux shim) and STEAM_API_LOADLIB_FORCE on
+// Windows (a more accurate name there); both are honored on either platform
+// for ergonomics.
+shim_module_t open_steamclient() {
+    auto try_force_env = [](const char *envname) -> shim_module_t {
+        const char *v = getenv(envname);
+        if (!v || !*v) return nullptr;
+        logf("%s=%s", envname, v);
+        shim_module_t h = shim_module_load(v);
         if (h) return h;
-        logf("dlopen(%s) failed: %s", force, dlerror());
+        logf("loadlib(%s) failed", v);
+        return nullptr;
+    };
+    if (shim_module_t h = try_force_env("STEAM_API_DLOPEN_FORCE")) return h;
+#ifdef _WIN32
+    if (shim_module_t h = try_force_env("STEAM_API_LOADLIB_FORCE")) return h;
+
+    // Read the SteamPath value from the user's Steam registry hive. Steam
+    // installs always set this to the install root (typically
+    // C:\Program Files (x86)\Steam, but user-configurable).
+    char steamPath[MAX_PATH];
+    steamPath[0] = '\0';
+    HKEY hKey = nullptr;
+    if (::RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\Valve\\Steam", 0,
+                        KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD cb = sizeof(steamPath);
+        DWORD type = 0;
+        // Try "SteamPath" first (the standard value name).
+        if (::RegQueryValueExA(hKey, "SteamPath", nullptr, &type,
+                               (LPBYTE)steamPath, &cb) != ERROR_SUCCESS) {
+            steamPath[0] = '\0';
+        }
+        ::RegCloseKey(hKey);
     }
+
+    // Per-bitness search list. The default name picked by
+    // STEAMCLIENT_DEFAULT_NAME varies (steamclient64.dll on Win64,
+    // steamclient.dll on Win32). Probe Steam install + the standard
+    // bin / steamapps\common\Steam Client subdirs.
+    char buf[MAX_PATH * 2];
+    if (steamPath[0]) {
+        const char *suffixes[] = {
+            "\\" STEAMCLIENT_DEFAULT_NAME,
+            "\\bin\\" STEAMCLIENT_DEFAULT_NAME,
+            "\\steamapps\\common\\Steam Client\\" STEAMCLIENT_DEFAULT_NAME,
+            nullptr
+        };
+        for (int i = 0; suffixes[i]; ++i) {
+            snprintf(buf, sizeof(buf), "%s%s", steamPath, suffixes[i]);
+            if (file_exists(buf)) {
+                logf("trying %s", buf);
+                shim_module_t h = shim_module_load(buf);
+                if (h) return h;
+                logf("LoadLibrary(%s) failed", buf);
+            }
+        }
+    }
+    // PATH search + cwd
+    const char *plain[] = { STEAMCLIENT_DEFAULT_NAME, ".\\" STEAMCLIENT_DEFAULT_NAME, nullptr };
+    for (int i = 0; plain[i]; ++i) {
+        logf("trying %s", plain[i]);
+        shim_module_t h = shim_module_load(plain[i]);
+        if (h) return h;
+        logf("LoadLibrary(%s) failed", plain[i]);
+    }
+    return nullptr;
+#else
     const char *home = getenv("HOME");
     char buf[1024];
     const char *suffixes[] = {
-#if defined(__aarch64__)
+#  if defined(__aarch64__)
         "/.steam/sdkarm64/steamclient.so",
         "/.steam/steam/linuxarm64/steamclient.so",
-#endif
-#if defined(__x86_64__) || defined(__aarch64__)
+#  endif
+#  if defined(__x86_64__) || defined(__aarch64__)
         "/.steam/sdk64/steamclient.so",
         "/.steam/steam/linux64/steamclient.so",
-#endif
+#  endif
         "/.steam/sdk32/steamclient.so",
         "/.steam/steam/linux32/steamclient.so",
         nullptr
@@ -244,7 +371,7 @@ void *open_steamclient() {
             snprintf(buf, sizeof(buf), "%s%s", home, suffixes[i]);
             if (file_exists(buf)) {
                 logf("trying %s", buf);
-                void *h = dlopen(buf, RTLD_NOW);
+                shim_module_t h = shim_module_load(buf);
                 if (h) return h;
                 logf("dlopen(%s) failed: %s", buf, dlerror());
             }
@@ -254,49 +381,52 @@ void *open_steamclient() {
     const char *plain[] = { "steamclient.so", "./steamclient.so", nullptr };
     for (int i = 0; plain[i]; i++) {
         logf("trying %s", plain[i]);
-        void *h = dlopen(plain[i], RTLD_NOW);
+        shim_module_t h = shim_module_load(plain[i]);
         if (h) return h;
         logf("dlopen(%s) failed: %s", plain[i], dlerror());
     }
     return nullptr;
+#endif
 }
 
 bool ensure_steamclient_loaded() {
     if (g_hSteamClientLib) return true;
     log_init();
-    void *h = open_steamclient();
+    shim_module_t h = open_steamclient();
     if (!h) {
-        fprintf(stderr, "libsteam_api: failed to dlopen steamclient.so "
+        fprintf(stderr, "libsteam_api: failed to load %s "
                         "(set STEAM_API_DLOPEN_FORCE=path or "
-                        "REHLDS_LIBSTEAM_API_DEBUG=1 for diagnostics)\n");
+                        "REHLDS_LIBSTEAM_API_DEBUG=1 for diagnostics)\n",
+                        STEAMCLIENT_DEFAULT_NAME);
         return false;
     }
-    g_pCreateInterface = (CreateInterfaceFn)dlsym(h, "CreateInterface");
-    g_pSteam_BGetCallback = (Steam_BGetCallback_t)dlsym(h, "Steam_BGetCallback");
-    g_pSteam_FreeLastCallback = (Steam_FreeLastCallback_t)dlsym(h, "Steam_FreeLastCallback");
-    g_pSteam_GetAPICallResult = (Steam_GetAPICallResult_t)dlsym(h, "Steam_GetAPICallResult");
+    g_pCreateInterface = (CreateInterfaceFn)shim_module_symbol(h, "CreateInterface");
+    g_pSteam_BGetCallback = (Steam_BGetCallback_t)shim_module_symbol(h, "Steam_BGetCallback");
+    g_pSteam_FreeLastCallback = (Steam_FreeLastCallback_t)shim_module_symbol(h, "Steam_FreeLastCallback");
+    g_pSteam_GetAPICallResult = (Steam_GetAPICallResult_t)shim_module_symbol(h, "Steam_GetAPICallResult");
 
     // Breakpad/minidump trampolines. These are exported by both legacy and
-    // anniversary steamclient.so; we resolve them here so the proxy
+    // anniversary steamclient.{so,dll}; we resolve them here so the proxy
     // exports below can call through directly. Failures (NULL) are tolerated
-    // — proxies just become no-ops on builds of steamclient.so that don't
+    // — proxies just become no-ops on builds of steamclient that don't
     // expose them.
-    g_pBreakpad_SteamSetAppID = (Breakpad_SetAppID_t)dlsym(h, "Breakpad_SteamSetAppID");
+    g_pBreakpad_SteamSetAppID = (Breakpad_SetAppID_t)shim_module_symbol(h, "Breakpad_SteamSetAppID");
     g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId =
-        (Breakpad_WriteMiniDumpExInfo_t)dlsym(h, "Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId");
+        (Breakpad_WriteMiniDumpExInfo_t)shim_module_symbol(h, "Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId");
     g_pBreakpad_SteamWriteMiniDumpSetComment =
-        (Breakpad_SetComment_t)dlsym(h, "Breakpad_SteamWriteMiniDumpSetComment");
-    g_pBreakpad_SteamSetSteamID = (Breakpad_SetSteamID_t)dlsym(h, "Breakpad_SteamSetSteamID");
+        (Breakpad_SetComment_t)shim_module_symbol(h, "Breakpad_SteamWriteMiniDumpSetComment");
+    g_pBreakpad_SteamSetSteamID = (Breakpad_SetSteamID_t)shim_module_symbol(h, "Breakpad_SteamSetSteamID");
     g_pBreakpad_SteamMiniDumpInit =
-        (Breakpad_MiniDumpInit_t)dlsym(h, "Breakpad_SteamMiniDumpInit");
+        (Breakpad_MiniDumpInit_t)shim_module_symbol(h, "Breakpad_SteamMiniDumpInit");
 
     if (!g_pCreateInterface) {
-        fprintf(stderr, "libsteam_api: steamclient.so missing CreateInterface\n");
-        dlclose(h);
+        fprintf(stderr, "libsteam_api: %s missing CreateInterface\n", STEAMCLIENT_DEFAULT_NAME);
+        shim_module_unload(h);
         return false;
     }
     g_hSteamClientLib = h;
-    logf("steamclient.so loaded: CreateInterface=%p Steam_BGetCallback=%p Steam_FreeLastCallback=%p",
+    logf("%s loaded: CreateInterface=%p Steam_BGetCallback=%p Steam_FreeLastCallback=%p",
+         STEAMCLIENT_DEFAULT_NAME,
          (void*)g_pCreateInterface, (void*)g_pSteam_BGetCallback, (void*)g_pSteam_FreeLastCallback);
     logf("breakpad trampolines: SetAppID=%p WriteMiniDump=%p SetComment=%p SetSteamID=%p",
          (void*)g_pBreakpad_SteamSetAppID,
@@ -381,10 +511,11 @@ void run_callbacks_pump(HSteamPipe pipe, bool bGameServer) {
 
 // ─── Exported API ───────────────────────────────────────────────────────────
 //
-// All exports use S_API which expands to extern "C" with default visibility
-// (see steam_api.h). 59-symbol legacy surface follows.
-
-#define SHIM_EXPORT extern "C" __attribute__((visibility("default")))
+// SHIM_EXPORT is defined at the top of this file as a cross-platform macro
+// (Linux: visibility("default"); Windows: __declspec(dllexport)). On
+// Windows the actual export surface is also enumerated by exports.def so
+// that ordinals + the data-export attribute on g_pSteamClientGameServer
+// stay aligned with the legacy 56-export Win32 ABI. POSIX uses exports.ver.
 
 // ─── Init / Shutdown / Run ──────────────────────────────────────────────────
 //
@@ -606,14 +737,34 @@ SHIM_EXPORT void SteamAPI_SetBreakpadAppID(uint32 unAppID) {
         g_pBreakpad_SteamSetAppID(unAppID);
 }
 
-// Crash signal handler installed by SteamAPI_UseBreakpadCrashHandler.
-// On SIGSEGV/SIGABRT/SIGFPE/SIGILL/SIGBUS:
-//   1. Invoke the user's pre-minidump callback if registered.
-//   2. Call Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId
-//      from steamclient.so to produce a minidump on disk.
-//   3. Restore the default signal disposition and re-raise so the
-//      kernel's normal handling (core dump or process termination)
-//      proceeds.
+// Crash handler installed by SteamAPI_UseBreakpadCrashHandler.
+//
+// POSIX path: install sigaction for SIGSEGV/SIGABRT/SIGFPE/SIGILL/SIGBUS;
+// each handler invokes the optional pre-minidump callback, calls
+// Breakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId from
+// steamclient.so, restores SIG_DFL, and re-raises so the kernel's normal
+// handling (core dump or termination) proceeds.
+//
+// Windows path: install a top-level SetUnhandledExceptionFilter that
+// performs the equivalent. The legacy Win32 libsteam_api.dll uses this
+// pattern; on x64 we get the same behavior with the same signature.
+#ifdef _WIN32
+static LONG WINAPI shim_breakpad_unhandled_filter(EXCEPTION_POINTERS *info) {
+    if (g_pPreMinidumpCallback) {
+        g_pPreMinidumpCallback(g_pPreMinidumpContext);
+    }
+    if (g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId) {
+        DWORD code = info && info->ExceptionRecord
+                        ? info->ExceptionRecord->ExceptionCode
+                        : 0;
+        // Match the prototype the legacy lib uses on Windows: structured
+        // exception code + EXCEPTION_POINTERS* + appID.
+        g_pBreakpad_SteamWriteMiniDumpUsingExceptionInfoWithBuildId(
+            (uint32)code, info, g_unBreakpadAppID);
+    }
+    return EXCEPTION_CONTINUE_SEARCH; // let the OS take its default action
+}
+#else
 static void shim_breakpad_signal_handler(int sig, siginfo_t * /*info*/, void * /*uctx*/) {
     if (g_pPreMinidumpCallback) {
         g_pPreMinidumpCallback(g_pPreMinidumpContext);
@@ -631,6 +782,7 @@ static void shim_breakpad_signal_handler(int sig, siginfo_t * /*info*/, void * /
     signal(sig, SIG_DFL);
     raise(sig);
 }
+#endif
 
 SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
                                                   const char *pchDate,
@@ -639,8 +791,8 @@ SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
                                                   void *pvContext,
                                                   PFNPreMinidumpCallback m_pfnPreMinidumpCallback) {
     // Match legacy v1.60 @ 0x8a3a: print the diagnostic line, store
-    // version/date/build info, install signal handlers, and drive
-    // Breakpad_SteamMiniDumpInit from steamclient.so for the
+    // version/date/build info, install crash hook, and drive
+    // Breakpad_SteamMiniDumpInit from steamclient.{so,dll} for the
     // breakpad-side init.
     fwrite("Using breakpad crash handler\n", 29, 1, stderr);
 
@@ -660,7 +812,7 @@ SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
     g_pPreMinidumpCallback = (PFNPreMinidumpCallback_t)m_pfnPreMinidumpCallback;
     g_pPreMinidumpContext = pvContext;
 
-    // Drive steamclient.so's MiniDumpInit so its internal breakpad state
+    // Drive steamclient's MiniDumpInit so its internal breakpad state
     // is configured (sets up the dump folder, build identifier, etc.).
     if (g_pBreakpad_SteamMiniDumpInit) {
         g_pBreakpad_SteamMiniDumpInit(0, pchDate ? pchDate : "",
@@ -670,6 +822,13 @@ SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
     if (g_breakpadInstalled) return; // idempotent
     g_breakpadInstalled = true;
 
+#ifdef _WIN32
+    // Top-level SEH filter — fires once per process at the tail of any
+    // unhandled exception. SetUnhandledExceptionFilter returns the
+    // previous filter (we ignore it; chaining isn't part of legacy
+    // semantics).
+    ::SetUnhandledExceptionFilter(shim_breakpad_unhandled_filter);
+#else
     // Install signal handlers for the canonical crash-causing signals.
     // SA_RESETHAND so the kernel restores SIG_DFL when the handler
     // fires (in case raise(sig) inside the handler doesn't restore).
@@ -682,6 +841,7 @@ SHIM_EXPORT void SteamAPI_UseBreakpadCrashHandler(const char *pchVersion,
     sigaction(SIGFPE,  &sa, nullptr);
     sigaction(SIGILL,  &sa, nullptr);
     sigaction(SIGBUS,  &sa, nullptr);
+#endif
 }
 
 // ─── Sub-interface accessors (all return cached pointers) ───────────────────
@@ -953,14 +1113,20 @@ SHIM_EXPORT void Steam_RegisterInterfaceFuncs(void *hModule) {
     //   Steam_BGetCallback
     //   Steam_FreeLastCallback
     //   Steam_GetAPICallResult
-    // Our open_steamclient() already resolves these from steamclient.so
+    // Our open_steamclient() already resolves these from steamclient
     // directly, but if an external caller invokes this with a different
     // module handle (e.g., a test harness that wants to override the
     // pump), honor it by re-pointing the pumps at the new module.
+    //
+    // The hModule argument is treated as an opaque module handle —
+    // dlopen-result on POSIX, HMODULE/HINSTANCE on Windows — and passed
+    // through the shim_module_symbol wrapper that knows how to look up
+    // names on either platform.
     if (!hModule) return;
-    Steam_BGetCallback_t bg = (Steam_BGetCallback_t)dlsym(hModule, "Steam_BGetCallback");
-    Steam_FreeLastCallback_t fl = (Steam_FreeLastCallback_t)dlsym(hModule, "Steam_FreeLastCallback");
-    Steam_GetAPICallResult_t gar = (Steam_GetAPICallResult_t)dlsym(hModule, "Steam_GetAPICallResult");
+    shim_module_t h = static_cast<shim_module_t>(hModule);
+    Steam_BGetCallback_t bg = (Steam_BGetCallback_t)shim_module_symbol(h, "Steam_BGetCallback");
+    Steam_FreeLastCallback_t fl = (Steam_FreeLastCallback_t)shim_module_symbol(h, "Steam_FreeLastCallback");
+    Steam_GetAPICallResult_t gar = (Steam_GetAPICallResult_t)shim_module_symbol(h, "Steam_GetAPICallResult");
     if (bg)  g_pSteam_BGetCallback = bg;
     if (fl)  g_pSteam_FreeLastCallback = fl;
     if (gar) g_pSteam_GetAPICallResult = gar;
@@ -972,6 +1138,12 @@ SHIM_EXPORT HSteamUser Steam_GetHSteamUserCurrent() { return g_hSteamUser ? g_hS
 // internal helper that performs realpath()-equivalent resolution. We
 // implement via libc realpath() directly, which is the standard
 // POSIX function and matches legacy semantics closely.
+//
+// The legacy Win32 libsteam_api.dll never exported this symbol (verified
+// by objdump -p on rehlds/lib/steam_api.dll: 56 names, no SteamRealPath).
+// We mirror that — gate the export to POSIX so the Windows export surface
+// stays at the legacy 56 entries.
+#ifndef _WIN32
 SHIM_EXPORT int SteamRealPath(const char *pchInputPath, char *pchOutputBuf, int cubBufSize) {
     if (!pchInputPath || !pchOutputBuf || cubBufSize <= 0) return 0;
     // Legacy enforces a 4 KB ceiling on the output buffer (compares
@@ -994,9 +1166,17 @@ SHIM_EXPORT int SteamRealPath(const char *pchInputPath, char *pchOutputBuf, int 
     pchOutputBuf[n] = '\0';
     return (int)n;
 }
+#endif
 
-// _init / _fini are emitted by crti.o automatically. The legacy lib exposes
-// them as T symbols in .dynsym; modern aarch64 binutils omits them by
-// default (they're accessed via DT_INIT/DT_FINI dynamic tags). The linker
-// flag --export-dynamic-symbol=_init,_fini in CMakeLists.txt forces them
-// into the dynamic symbol table to match the legacy 59-symbol surface.
+// On POSIX, _init / _fini are emitted by crti.o automatically. The legacy
+// lib exposes them as T symbols in .dynsym; modern aarch64 binutils omits
+// them by default (they're accessed via DT_INIT/DT_FINI dynamic tags). The
+// linker flag in exports.ver forces them into the dynamic symbol table to
+// match the legacy 59-symbol surface.
+//
+// On Windows there is no _init/_fini equivalent visible to consumers — the
+// PE loader calls DllMain on each load/unload event instead, and DllMain
+// is not exported. The shim has no DllMain because all per-process state
+// is lazily initialized at first use (g_pCreateInterface == nullptr check
+// in ensure_steamclient_loaded), which matches the legacy Win32 lib's
+// behavior. The exports.def file enumerates the 56 legacy Win32 names.

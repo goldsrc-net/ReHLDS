@@ -1,18 +1,25 @@
-# dep/libsteam_api — v1.60-shaped libsteam_api.so reimplementation.
+# dep/libsteam_api — v1.60-shaped libsteam_api shim reimplementation.
 #
-# Built only on aarch64/arm64 hosts where Valve doesn't ship a v1.60-era
-# binary. On x86 the prebuilt binary at rehlds/lib/linux32/libsteam_api.so
-# is used as-is (legacy convention).
+# This CMakeLists drives the POSIX (.so) build only. The Windows build
+# uses the dedicated MSVC project at dep/libsteam_api/msvc/libsteam_api.vcxproj
+# which is wired into msvc/ReHLDS.sln; that project shares this same
+# libsteam_api.cpp source. Skip when invoked from MSVC so the GCC-only
+# flags below don't reach a Visual Studio generator.
 
 cmake_minimum_required(VERSION 3.10)
 
+if(MSVC)
+    message(STATUS "libsteam_api shim: skipping CMake build (MSVC drives the .vcxproj)")
+    return()
+endif()
+
 # Build the shim from source on every supported architecture. This makes
 # the v1.60 ABI contract a build-time guarantee on every platform: regardless
-# of which Valve-shipped libsteam_api.so a user might have inherited from
-# their Steam install (steam_legacy v1.60-era, anniversary v1.64+, or any
-# future SDK), ReHLDS releases bundle a libsteam_api.so we built from this
-# source tree that asks steamclient.so for the immutable v1.60 version
-# strings and exposes the 59-symbol legacy export surface to the engine.
+# of which Valve-shipped libsteam_api binary a user might have inherited
+# from their Steam install (steam_legacy v1.60-era, anniversary v1.64+, or
+# any future SDK), ReHLDS releases bundle a libsteam_api we built from this
+# source tree that asks steamclient.{so,dll} for the immutable v1.60 version
+# strings and exposes the legacy export surface to the engine.
 #
 # Replaces:
 #   - lib/linux32/libsteam_api.so : prebuilt 2010-era Valve binary (was the
