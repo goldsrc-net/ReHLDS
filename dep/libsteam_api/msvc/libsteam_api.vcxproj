@@ -25,25 +25,49 @@
       <Configuration>Debug</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug Play|Win32">
       <Configuration>Debug Play</Configuration>
       <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug Play|x64">
+      <Configuration>Debug Play</Configuration>
+      <Platform>x64</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|Win32">
       <Configuration>Release</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
     <ProjectConfiguration Include="Release Play|Win32">
       <Configuration>Release Play</Configuration>
       <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release Play|x64">
+      <Configuration>Release Play</Configuration>
+      <Platform>x64</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Test Fixes|Win32">
       <Configuration>Test Fixes</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Test Fixes|x64">
+      <Configuration>Test Fixes</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
     <ProjectConfiguration Include="Tests|Win32">
       <Configuration>Tests</Configuration>
       <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Tests|x64">
+      <Configuration>Tests</Configuration>
+      <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
@@ -79,13 +103,21 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
 
-  <!-- All configs: emit steam_api.dll + .lib + .pdb under rehlds/lib/win32/.
-       The TargetName is "steam_api" so the DLL is steam_api.dll regardless
-       of configuration; consumers reference it by that fixed name. -->
-  <PropertyGroup>
+  <!-- Per-platform output: Valve's convention names the 32-bit redist
+       steam_api.dll and the 64-bit one steam_api64.dll, dropped under
+       rehlds/lib/{win32,win64}/ for symmetry with the Linux per-arch
+       layout (rehlds/lib/{linux32,linux64,linuxarm64}/libsteam_api.so).
+       Consumers (ReHLDS.vcxproj) reference these fixed names per platform. -->
+  <PropertyGroup Condition="'$(Platform)'=='Win32'">
     <OutDir>$(SolutionDir)..\rehlds\lib\win32\</OutDir>
-    <IntDir>$(ProjectDir)build\$(Configuration)_$(Platform)\</IntDir>
     <TargetName>steam_api</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <OutDir>$(SolutionDir)..\rehlds\lib\win64\</OutDir>
+    <TargetName>steam_api64</TargetName>
+  </PropertyGroup>
+  <PropertyGroup>
+    <IntDir>$(ProjectDir)build\$(Configuration)_$(Platform)\</IntDir>
   </PropertyGroup>
 
   <!-- Debug-family build settings. -->
