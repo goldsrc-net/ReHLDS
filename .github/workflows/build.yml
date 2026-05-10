@@ -12,11 +12,24 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Limit run to a single pipeline (push/PR/release always run all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - windows
+          - linux
+          - linux-amd64
+          - linux-arm64
 
 jobs:
   windows:
     name: 'Windows'
     runs-on: windows-2025
+    if: ${{ inputs.scope == '' || inputs.scope == 'all' || inputs.scope == 'windows' }}
 
     env:
       solution: 'msvc/ReHLDS.sln'
@@ -191,6 +204,7 @@ jobs:
     runs-on: ubuntu-24.04
     container: rehldsorg/testdemos:latest
     needs: [windows]
+    if: ${{ inputs.scope == '' || inputs.scope == 'all' || inputs.scope == 'windows' }}
     defaults:
       run:
         shell: bash
@@ -228,6 +242,7 @@ jobs:
     name: 'Linux'
     runs-on: ubuntu-24.04
     container: debian:11-slim
+    if: ${{ inputs.scope == '' || inputs.scope == 'all' || inputs.scope == 'linux' }}
 
     steps:
       - name: Install dependencies
@@ -373,6 +388,7 @@ jobs:
     name: 'Linux amd64'
     runs-on: ubuntu-24.04
     container: debian:11-slim
+    if: ${{ inputs.scope == '' || inputs.scope == 'all' || inputs.scope == 'linux-amd64' }}
 
     steps:
       - name: Install dependencies
@@ -491,6 +507,7 @@ jobs:
     # container.
     runs-on: ubuntu-24.04-arm
     container: debian:11-slim
+    if: ${{ inputs.scope == '' || inputs.scope == 'all' || inputs.scope == 'linux-arm64' }}
 
     steps:
       - name: Install dependencies
