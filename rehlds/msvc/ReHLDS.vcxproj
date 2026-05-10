@@ -471,6 +471,13 @@
       <Project>{6973dca5-253c-4d84-b51e-187e035eae06}</Project>
       <Private>false</Private>
     </ProjectReference>
+    <ProjectReference Include="..\..\dep\libsteam_api\msvc\libsteam_api.vcxproj">
+      <Project>{8c8bafe2-1e47-4b2c-bd3e-9f6a7c8d1234}</Project>
+      <!-- LinkLibraryDependencies=false: ReHLDS picks up steam_api.lib via
+           AdditionalDependencies pointing at rehlds/lib/win32/, so MSVC
+           shouldn't auto-link the project's import library a second time. -->
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{70A2B904-B7DB-4C48-8DE0-AF567360D572}</ProjectGuid>
@@ -594,7 +601,7 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>
@@ -627,7 +634,7 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>
@@ -661,7 +668,7 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>
@@ -669,7 +676,7 @@
       <AdditionalLibraryDirectories>$(VCInstallDir)UnitTest\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)..\lib\steam_api.dll" "$(OutDir)"</Command>
+      <Command>copy /Y "$(ProjectDir)..\lib\win32\steam_api.dll" "$(OutDir)"</Command>
       <Message>Automatic deployment script</Message>
     </PostBuildEvent>
     <CustomBuildStep>
@@ -693,7 +700,7 @@
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>
@@ -701,7 +708,7 @@
       <AdditionalLibraryDirectories>$(VCInstallDir)UnitTest\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)..\lib\steam_api.dll" "$(OutDir)"</Command>
+      <Command>copy /Y "$(ProjectDir)..\lib\win32\steam_api.dll" "$(OutDir)"</Command>
       <Message>Automatic deployment script</Message>
     </PostBuildEvent>
     <CustomBuildStep>
@@ -729,7 +736,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>
@@ -769,7 +776,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>psapi.lib;ws2_32.lib;$(ProjectDir)../lib/win32/steam_api.lib;$(ProjectDir)../lib/libacof32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <MinimumRequiredVersion>
       </MinimumRequiredVersion>
       <ModuleDefinitionFile>

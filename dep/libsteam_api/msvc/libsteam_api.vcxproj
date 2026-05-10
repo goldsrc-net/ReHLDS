@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  libsteam_api shim — MSVC project (Win32 only; M3 adds x64).
+
+  Builds dep/libsteam_api/libsteam_api.cpp into a DLL whose export surface
+  is enumerated by ..\exports.def. The output (steam_api.dll +
+  steam_api.lib import lib + .pdb) is dropped under the project's
+  rehlds/lib/win32/ subdir for symmetry with the Linux per-arch layout
+  (rehlds/lib/{linux32,linux64,linuxarm64}/libsteam_api.so).
+
+  The solution exposes more configurations than this DLL needs (Tests /
+  Test Fixes / Debug Play / Release Play). Map them all to one of two
+  internal builds: debug-info / unoptimized for the Debug-family configs,
+  optimized + LTCG for the Release-family configs. Tests / Test Fixes go
+  into the Debug bucket so test runs link against an unoptimized shim.
+
+  STEAM_API_NODLL keeps S_API in the SDK headers as plain `extern "C"`
+  (no dllimport on declarations); SHIM_EXPORT in the source applies the
+  per-function dllexport. The .def file is the authoritative export
+  list — it pins ordinals and marks g_pSteamClientGameServer as DATA.
+-->
+<Project DefaultTargets="Build" ToolsVersion="12.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug Play|Win32">
+      <Configuration>Debug Play</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release Play|Win32">
+      <Configuration>Release Play</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Test Fixes|Win32">
+      <Configuration>Test Fixes</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Tests|Win32">
+      <Configuration>Tests</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{8C8BAFE2-1E47-4B2C-BD3E-9F6A7C8D1234}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>libsteam_api</RootNamespace>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <!-- Configuration property groups. Debug-family → unoptimized; Release-family → MaxSpeed + LTCG. -->
+  <PropertyGroup Condition="'$(Configuration)'=='Debug' Or '$(Configuration)'=='Debug Play' Or '$(Configuration)'=='Test Fixes' Or '$(Configuration)'=='Tests'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Release' Or '$(Configuration)'=='Release Play'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '15.0'">v141</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' == '16.0'">v142</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+
+  <!-- All configs: emit steam_api.dll + .lib + .pdb under rehlds/lib/win32/.
+       The TargetName is "steam_api" so the DLL is steam_api.dll regardless
+       of configuration; consumers reference it by that fixed name. -->
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)..\rehlds\lib\win32\</OutDir>
+    <IntDir>$(ProjectDir)build\$(Configuration)_$(Platform)\</IntDir>
+    <TargetName>steam_api</TargetName>
+  </PropertyGroup>
+
+  <!-- Debug-family build settings. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug' Or '$(Configuration)'=='Debug Play' Or '$(Configuration)'=='Test Fixes' Or '$(Configuration)'=='Tests'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>Disabled</Optimization>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;STEAM_API_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\stub_include;$(SolutionDir)..\rehlds\public;$(SolutionDir)..\rehlds\public\steam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>$(ProjectDir)..\exports.def</ModuleDefinitionFile>
+      <AdditionalDependencies>kernel32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- Release-family build settings. -->
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release' Or '$(Configuration)'=='Release Play'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <Optimization>MaxSpeed</Optimization>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;_CRT_SECURE_NO_WARNINGS;STEAM_API_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\stub_include;$(SolutionDir)..\rehlds\public;$(SolutionDir)..\rehlds\public\steam;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <ModuleDefinitionFile>$(ProjectDir)..\exports.def</ModuleDefinitionFile>
+      <AdditionalDependencies>kernel32.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="..\libsteam_api.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\exports.def" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>
