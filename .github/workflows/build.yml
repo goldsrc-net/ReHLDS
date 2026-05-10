@@ -150,6 +150,9 @@ jobs:
           choco install rcedit -y
 
       - name: Move files
+        # CMD batch — uses REM comments and `goto skip_win64` to make the
+        # win64 block conditional. PowerShell can't parse REM/goto.
+        shell: cmd
         run: |
           mkdir publish\debug
           mkdir publish\tests
