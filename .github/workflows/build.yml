@@ -234,11 +234,12 @@ jobs:
         run: |
           dpkg --add-architecture i386
           apt-get update
-          apt-get install -y \
+          apt-get install -y --no-install-recommends \
             gcc-multilib g++-multilib \
             build-essential \
             libc6-dev libc6-dev-i386 \
-            git cmake rsync \
+            git cmake rsync ca-certificates \
+            gnupg \
             g++ gcc
 
       - name: Configure
@@ -378,7 +379,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake git rsync ca-certificates \
+            build-essential cmake git ca-certificates \
+            gnupg \
             g++ gcc
 
       - name: Configure
@@ -388,6 +390,49 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: GPG Import
+        run: |
+          echo "${{ secrets.PUB_ASC }}" > "${{ secrets.PUB_ASC_FILE }}"
+          echo "${{ secrets.KEY_ASC }}" > "${{ secrets.KEY_ASC_FILE }}"
+
+          # Import the public key
+          gpg --batch --yes --import "${{ secrets.PUB_ASC_FILE }}"
+          if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to import the public key"
+            exit 1
+          fi
+
+          # Import the private key
+          gpg --batch --yes --import "${{ secrets.KEY_ASC_FILE }}"
+          if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to import the private key"
+            exit 2
+          fi
+
+          # Extract the fingerprint of the imported public key
+          GPG_LINUX_FINGERPRINT=$(gpg --list-keys --with-colons | grep '^fpr' | head -n 1 | cut -d: -f10)
+
+          # Check if the fingerprint was extracted
+          if [[ -z "$GPG_LINUX_FINGERPRINT" ]]; then
+            echo "Error: Failed to extract the fingerprint of the key"
+            exit 3
+          fi
+
+          # Set the trust level for the key
+          echo "$GPG_LINUX_FINGERPRINT:6:" | gpg --batch --import-ownertrust
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to set trust for the key $GPG_LINUX_FINGERPRINT"
+            exit 4
+          fi
+
+          echo "Key $GPG_LINUX_FINGERPRINT successfully imported and trusted"
+          gpg --list-keys
+
+          #export for global use
+          echo "GPG_LINUX_FINGERPRINT=$GPG_LINUX_FINGERPRINT" >> $GITHUB_ENV
+        shell: bash
+        if: github.event_name != 'pull_request'
 
       - name: Build and Run unittests
         run: |
@@ -452,7 +497,8 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            build-essential cmake git rsync ca-certificates \
+            build-essential cmake git ca-certificates \
+            gnupg \
             g++ gcc
 
       - name: Configure
@@ -462,6 +508,49 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: GPG Import
+        run: |
+          echo "${{ secrets.PUB_ASC }}" > "${{ secrets.PUB_ASC_FILE }}"
+          echo "${{ secrets.KEY_ASC }}" > "${{ secrets.KEY_ASC_FILE }}"
+
+          # Import the public key
+          gpg --batch --yes --import "${{ secrets.PUB_ASC_FILE }}"
+          if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to import the public key"
+            exit 1
+          fi
+
+          # Import the private key
+          gpg --batch --yes --import "${{ secrets.KEY_ASC_FILE }}"
+          if [[ $? -ne 0 ]]; then
+            echo "Error: Failed to import the private key"
+            exit 2
+          fi
+
+          # Extract the fingerprint of the imported public key
+          GPG_LINUX_FINGERPRINT=$(gpg --list-keys --with-colons | grep '^fpr' | head -n 1 | cut -d: -f10)
+
+          # Check if the fingerprint was extracted
+          if [[ -z "$GPG_LINUX_FINGERPRINT" ]]; then
+            echo "Error: Failed to extract the fingerprint of the key"
+            exit 3
+          fi
+
+          # Set the trust level for the key
+          echo "$GPG_LINUX_FINGERPRINT:6:" | gpg --batch --import-ownertrust
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to set trust for the key $GPG_LINUX_FINGERPRINT"
+            exit 4
+          fi
+
+          echo "Key $GPG_LINUX_FINGERPRINT successfully imported and trusted"
+          gpg --list-keys
+
+          #export for global use
+          echo "GPG_LINUX_FINGERPRINT=$GPG_LINUX_FINGERPRINT" >> $GITHUB_ENV
+        shell: bash
+        if: github.event_name != 'pull_request'
 
       - name: Build and Run unittests
         run: |
