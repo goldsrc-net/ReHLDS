@@ -27,7 +27,7 @@
 */#ifndef ARCHTYPES_H
 #define ARCHTYPES_H
 
-#ifdef __x86_64__
+#if defined(__x86_64__) || defined(__aarch64__) || defined(_WIN64)
 #define X64BITS
 #endif
 
@@ -41,8 +41,17 @@ typedef __int32 int32;
 typedef unsigned __int32 uint32;
 typedef __int64 int64;
 typedef unsigned __int64 uint64;
-typedef __int32 intp;				// intp is an integer that can accomodate a pointer
-typedef unsigned __int32 uintp;		// (ie, sizeof(intp) >= sizeof(int) && sizeof(intp) >= sizeof(void *)
+// intp is an integer that can accommodate a pointer
+// (sizeof(intp) >= sizeof(int) && sizeof(intp) >= sizeof(void *)).
+// MSVC on Win64 needs __int64 here; on Win32 __int32 suffices.
+// steamtypes.h has the same definition gated the same way; both must agree.
+#ifdef _WIN64
+typedef __int64 intp;
+typedef unsigned __int64 uintp;
+#else
+typedef __int32 intp;
+typedef unsigned __int32 uintp;
+#endif
 
 #else /* _WIN32 */
 typedef char int8;
