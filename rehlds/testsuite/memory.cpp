@@ -714,10 +714,23 @@ bool HIDDEN HookFunction(Module *module, FunctionHook *hook)
 	if (hook->originalAddress == NULL)
 		return false;
 
-	// Calculate and store offset for jump to our handler
+	// 5-byte JMP rel32 patch: opcode 0xE9 + signed 32-bit displacement.
+	// Use int32_t (always 4 bytes) instead of size_t for the disp store —
+	// MSVC's C4789 flags size_t (8 bytes on x64) as a buffer overrun on
+	// `unsigned char patch[5]`. The displacement field of x86/x64 JMP
+	// rel32 is fixed at 32 bits regardless of address-size, so int32_t
+	// is the correct width on both platforms.
+	//
+	// Note on x64: this technique only works when |handler - original|
+	// fits in ±2GB. Hooks installed by the testsuite live in the same
+	// module space so the range is fine in practice; if it ever isn't,
+	// the test framework would need a 14-byte trampoline (JMP qword
+	// ptr [rip+0]; .quad target). We don't currently exercise testsuite
+	// on x64 (testdemos container is i386 wine), so this is acceptable.
 	unsigned char patch[5];
-	*(size_t *)&patch[1] = hook->handlerFunc - hook->originalAddress - 5;
+	int32_t disp = (int32_t)((char*)hook->handlerFunc - (char*)hook->originalAddress - 5);
 	patch[0] = 0xE9;
+	*(int32_t *)&patch[1] = disp;
 
 	ExchangeMemoryBytes(hook->originalAddress, (size_t)patch, 5);
 
@@ -726,9 +739,13 @@ bool HIDDEN HookFunction(Module *module, FunctionHook *hook)
 
 void HIDDEN HookFunctionCall(void* hookWhat, void* hookAddr)
 {
+	// Same 5-byte CALL rel32 pattern; opcode 0xE8 + 4-byte signed disp.
+	// See HookFunction comment above for the int32_t-vs-size_t rationale
+	// and the ±2GB caveat on x64.
 	unsigned char patch[5];
-	*(size_t *)&patch[1] = (size_t)hookAddr - (size_t)hookWhat - 5;
+	int32_t disp = (int32_t)((char*)hookAddr - (char*)hookWhat - 5);
 	patch[0] = 0xE8;
+	*(int32_t *)&patch[1] = disp;
 
 	ExchangeMemoryBytes((size_t)hookWhat, (size_t)patch, 5);
 }

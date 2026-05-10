@@ -52,22 +52,35 @@ void Ed_StrPool_Init() {
 
 	g_EdStringPool_Hunk.maxsize = 128 * 1024;
 	g_EdStringPool_Hunk.data = (byte*) Hunk_AllocName(g_EdStringPool_Hunk.maxsize, "Ed_StrPool");
-	// Reserve byte 0 of the buffer as the empty-string sentinel.
-	// SV_SpawnServer anchors pr_strings to data[0], so on 64-bit hosts
+#if INTPTR_MAX > INT32_MAX
+	// 64-bit only: reserve byte 0 of the buffer as the empty-string sentinel.
+	// SV_SpawnServer anchors pr_strings to data[0] on 64-bit hosts, so
 	// pr_strings + 0 must read '\0' (preserving the "string at offset 0
 	// is the empty string" contract that the legacy gNullString provided).
+	// On 32-bit, pr_strings = gNullString (upstream behavior), so the
+	// sentinel reservation isn't needed and shifts every string offset by
+	// 1 — that diverges from upstream's exact byte values for any field
+	// (pev->classname etc.) that ends up in network packets, breaking
+	// the rehldsorg/testdemos suite's recorded packet comparisons.
 	g_EdStringPool_Hunk.data[0] = '\0';
 	g_EdStringPool_Hunk.cursize = 1;
+#else
+	g_EdStringPool_Hunk.cursize = 0;
+#endif
 	g_EdStringPool_Hunk.buffername = "Ed_StrPool";
 	g_EdStringPool_Hunk.flags = SIZEBUF_ALLOW_OVERFLOW;
 }
 
 void Ed_StrPool_Reset() {
+#if INTPTR_MAX > INT32_MAX
 	// Preserve byte 0 as the empty-string sentinel (see Ed_StrPool_Init).
 	g_EdStringPool_Hunk.cursize = 1;
 	if (g_EdStringPool_Hunk.data) {
 		g_EdStringPool_Hunk.data[0] = '\0';
 	}
+#else
+	g_EdStringPool_Hunk.cursize = 0;
+#endif
 	g_EdStringPool_Hunk.flags = SIZEBUF_ALLOW_OVERFLOW;
 	g_EdStringPool.clear();
 }

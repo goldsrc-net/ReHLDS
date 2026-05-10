@@ -313,7 +313,11 @@ NOXREF void TextMessageParse(unsigned char *pMemFile, int fileSize)
 	NOXREFCHECK;
 	char buf[512];
 	char trim[512];
-	char *pCurrentText;
+	// Initialize so MSVC's SDL flow analyzer (C4703 → error on x64
+	// build) doesn't mistakenly flag the use at line 390 as
+	// potentially-uninitialized; in practice MSGFILE_TEXT is only
+	// reached after IsStartOfText(trim) sets pCurrentText.
+	char *pCurrentText = NULL;
 	char *pNameHeap;
 	char currentName[512];
 	char nameHeap[NAME_HEAP_SIZE];
