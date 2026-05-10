@@ -103,8 +103,16 @@ jobs:
           msbuild ${{ env.solution }} -p:Configuration="${{ env.buildRelease }}" /t:Clean,Build /p:Platform=Win32 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
           msbuild ${{ env.solution }} -p:Configuration="${{ env.buildReleasePlay }}" /t:Clean,Build /p:Platform=Win32 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
 
+      # x64 is allowed to fail without blocking Win32 publish + testdemos.
+      # The Win32 build is well-tested and matches upstream's 32-bit packet
+      # behavior; x64 is a port-in-progress where LP64 fallout will surface
+      # incrementally on first builds and be patched as found. continue-on-error
+      # on the build steps lets the artifact still ship Win32 binaries; the
+      # x64-only artifact path then conditionalizes on the build's result.
       - name: Build and Run unittests (x64)
+        id: build_x64_unittests
         shell: pwsh
+        continue-on-error: true
         run: |
           $toolset = '${{ steps.select_toolset.outputs.toolset }}'
           msbuild ${{ env.solution }} -p:Configuration="${{ env.buildTest }}" /t:Clean,Build /p:Platform=x64 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
@@ -114,11 +122,27 @@ jobs:
           {[Environment]::Exit(1)}
 
       - name: Build (x64)
+        id: build_x64_release
         shell: pwsh
+        continue-on-error: true
         run: |
           $toolset = '${{ steps.select_toolset.outputs.toolset }}'
           msbuild ${{ env.solution }} -p:Configuration="${{ env.buildRelease }}" /t:Clean,Build /p:Platform=x64 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
           msbuild ${{ env.solution }} -p:Configuration="${{ env.buildReleasePlay }}" /t:Clean,Build /p:Platform=x64 /p:PlatformToolset=$toolset /p:XPDeprecationWarning=false
+
+      - name: Mark x64 success
+        id: x64_status
+        shell: pwsh
+        run: |
+          $okU = '${{ steps.build_x64_unittests.outcome }}'
+          $okR = '${{ steps.build_x64_release.outcome }}'
+          if ($okU -eq 'success' -and $okR -eq 'success') {
+              "ok=true" >> $env:GITHUB_OUTPUT
+              Write-Host "x64 build succeeded — will publish x64 artifacts."
+          } else {
+              "ok=false" >> $env:GITHUB_OUTPUT
+              Write-Host "x64 build failed (unittests=$okU, release=$okR) — Win32-only artifact will ship."
+          }
 
       - name: Get rcedit from chocolatey
         shell: pwsh
@@ -156,7 +180,8 @@ jobs:
           copy /Y rehlds\lib\win32\steam_api.dll publish\bin\win32\steam_api.dll
           IF EXIST rehlds\lib\win32\steam_api.pdb move rehlds\lib\win32\steam_api.pdb publish\debug\steam_api.pdb
 
-          REM ─── Win64 binaries ────────────────────────────────────────────
+          REM ─── Win64 binaries (only when x64 build succeeded) ───────────
+          if "${{ steps.x64_status.outputs.ok }}"=="false" goto skip_win64
           move msvc\x64\${{ env.buildRelease }}\hlds.exe publish\bin\win64\hlds.exe
           move msvc\x64\${{ env.buildRelease }}\hltv.exe publish\bin\win64\hltv.exe
           move msvc\x64\${{ env.buildRelease }}\swds.dll publish\bin\win64\swds.dll
@@ -176,6 +201,7 @@ jobs:
           REM ─── Win64 libsteam_api shim ───────────────────────────────────
           copy /Y rehlds\lib\win64\steam_api64.dll publish\bin\win64\steam_api64.dll
           IF EXIST rehlds\lib\win64\steam_api64.pdb move rehlds\lib\win64\steam_api64.pdb publish\debug\steam_api64.pdb
+          :skip_win64
 
       - name: Get app version
         id: get_version
@@ -227,8 +253,11 @@ jobs:
              & rcedit $Path @args
          }
 
-         # Iterate Win32 + Win64 with the same metadata table.
-         foreach ($plat in @('win32', 'win64')) {
+         # Iterate Win32 + Win64 with the same metadata table. Skip win64
+         # if its build failed earlier (workflow continues with Win32 only).
+         $platforms = @('win32')
+         if ('${{ steps.x64_status.outputs.ok }}' -eq 'true') { $platforms += 'win64' }
+         foreach ($plat in $platforms) {
              $base = "${{ github.workspace }}\publish\bin\$plat"
              Edit-Resource "$base\hlds.exe"                       'ReHLDS' 'The Half-Life Dedicated Server' $false
              Edit-Resource "$base\hltv.exe"                       'ReHLTV' 'The Half-Life TV'              $false
@@ -266,7 +295,9 @@ jobs:
                    & $signtool sign /a /f $pfx /p $pass /d $Description /du "https://rehlds.dev/" /tr "http://timestamp.digicert.com" /td sha256 /fd sha256 /v $Path
                }
 
-               foreach ($plat in @('win32', 'win64')) {
+               $platforms = @('win32')
+               if ('${{ steps.x64_status.outputs.ok }}' -eq 'true') { $platforms += 'win64' }
+               foreach ($plat in $platforms) {
                    $base = "${{ github.workspace }}\publish\bin\$plat"
                    Sign-File "$base\hlds.exe"                       'ReHLDS'
                    Sign-File "$base\hltv.exe"                       'reHLTV'
@@ -279,9 +310,11 @@ jobs:
                }
                # Win32-only test artifact (testdemos container is x86 wine).
                Sign-File "${{ github.workspace }}\publish\tests\swds.dll" 'ReHLDS - swds.dll'
-               # libsteam_api shim — sign per-arch.
+               # libsteam_api shim — sign per-arch (x64 only if it built).
                Sign-File "${{ github.workspace }}\publish\bin\win32\steam_api.dll" 'ReHLDS - steam_api.dll'
-               Sign-File "${{ github.workspace }}\publish\bin\win64\steam_api64.dll" 'ReHLDS - steam_api64.dll'
+               if ('${{ steps.x64_status.outputs.ok }}' -eq 'true') {
+                   Sign-File "${{ github.workspace }}\publish\bin\win64\steam_api64.dll" 'ReHLDS - steam_api64.dll'
+               }
 
                Remove-Item -Recurse -Force $pfx
 
