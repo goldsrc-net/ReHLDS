@@ -458,6 +458,9 @@
     <ClInclude Include="..\version\version.h" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\dep\asmjit\msvc\asmjit.vcxproj">
+      <Project>{478c3696-567b-4093-b895-c9a3e324564b}</Project>
+    </ProjectReference>
     <ProjectReference Include="..\..\dep\bzip2\msvc\bzip2.vcxproj">
       <Project>{792df067-9904-4579-99b9-46c17277ade3}</Project>
     </ProjectReference>
@@ -578,11 +581,11 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_FIXES;REHLDS_SSE;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_FIXES;REHLDS_SSE;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <FloatingPointModel>Precise</FloatingPointModel>
       <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -611,11 +614,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug Play|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <FloatingPointModel>Precise</FloatingPointModel>
       <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -646,11 +649,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Tests|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;HAVE_OPT_STRTOOLS;REHLDS_SELF;REHLDS_UNIT_TESTS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;HAVE_OPT_STRTOOLS;REHLDS_SELF;REHLDS_UNIT_TESTS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>precompiled.h</PrecompiledHeaderFile>
@@ -678,11 +681,11 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test Fixes|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_FIXES;HAVE_OPT_STRTOOLS;REHLDS_SELF;REHLDS_SSE;REHLDS_JIT;REHLDS_UNIT_TESTS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_API;REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_FIXES;HAVE_OPT_STRTOOLS;REHLDS_SELF;REHLDS_SSE;REHLDS_JIT;REHLDS_UNIT_TESTS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>precompiled.h</PrecompiledHeaderFile>
@@ -709,13 +712,13 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release Play|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_SELF;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_FLIGHT_REC;REHLDS_OPT_PEDANTIC;REHLDS_SELF;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <PrecompiledHeader>Use</PrecompiledHeader>
@@ -749,13 +752,13 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\..\;$(ProjectDir)\..\metamod\include\;$(ProjectDir)\..\public\rehlds\;$(ProjectDir)\..\common;$(ProjectDir)\..\engine;$(ProjectDir)\..\public;$(ProjectDir)\..\pm_shared;$(ProjectDir)\..\rehlds\;$(ProjectDir)\..\testsuite\;$(VCInstallDir)UnitTest\include;$(SolutionDir)..\dep\bzip2\include\;$(SolutionDir)..\dep\cppunitlite\include\;$(SolutionDir)..\dep\asmjit\;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>REHLDS_API;REHLDS_FIXES;REHLDS_SSE;REHLDS_OPT_PEDANTIC;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>REHLDS_API;REHLDS_FIXES;REHLDS_SSE;REHLDS_OPT_PEDANTIC;REHLDS_SELF;REHLDS_CHECKS;HAVE_OPT_STRTOOLS;USE_BREAKPAD_HANDLER;DEDICATED;SWDS;ASMJIT_STATIC;ASMJIT_NO_FOREIGN;ASMJIT_NO_AARCH64;ASMJIT_NO_TEXT;ASMJIT_NO_LOGGING;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalOptions>/arch:IA32 %(AdditionalOptions)</AdditionalOptions>
       <PrecompiledHeader>Use</PrecompiledHeader>
