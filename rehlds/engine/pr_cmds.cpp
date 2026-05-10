@@ -132,16 +132,25 @@ void EXT_FUNC PF_setmodel_I(edict_t *e, const char *m)
 		{
 			e->v.modelindex = i;
 			model_t *mod = g_psv.models[i];
+#if INTPTR_MAX > INT32_MAX
 			// 64-bit: pointer subtraction between *check (in g_psv.model_precache table)
 			// or m (function arg) and pr_strings spans different memory regions, so
 			// the ptrdiff truncated to int produces garbage. AllocEngineString copies
 			// the string into the engine StrPool and returns a properly-bounded
 			// uint32 offset.
-#ifdef REHLDS_FIXES
+#  ifdef REHLDS_FIXES
 			e->v.model = AllocEngineString(*check);
-#else // REHLDS_FIXES
+#  else
 			e->v.model = AllocEngineString(m);
-#endif // REHLDS_FIXES
+#  endif
+#else
+			// 32-bit: keep upstream's ptrdiff so testdemos byte-output matches.
+#  ifdef REHLDS_FIXES
+			e->v.model = *check - pr_strings;
+#  else
+			e->v.model = m - pr_strings;
+#  endif
+#endif
 			if (mod)
 			{
 				SetMinMaxSize(e, mod->mins, mod->maxs, 1);
@@ -2019,11 +2028,16 @@ edict_t *EXT_FUNC CreateFakeClient_internal(const char *netname)
 	fakeclient->userid = g_userid++;
 	fakeclient->uploading = FALSE;
 	fakeclient->edict = ent;
+#if INTPTR_MAX > INT32_MAX
 	// 64-bit: fakeclient->name lives inside g_psvs.clients[] which is in a
 	// different memory region from pr_strings; the ptrdiff truncated to
 	// uint32 produces garbage. AllocEngineString copies the name into the
 	// engine StrPool and returns a properly-bounded offset.
 	ent->v.netname = AllocEngineString(fakeclient->name);
+#else
+	// 32-bit: keep upstream's ptrdiff so testdemos byte-output matches.
+	ent->v.netname = (size_t)fakeclient->name - (size_t)pr_strings;
+#endif
 	ent->v.pContainingEntity = ent;
 	ent->v.flags = FL_FAKECLIENT | FL_CLIENT;
 
