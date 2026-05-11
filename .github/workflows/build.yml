@@ -714,6 +714,29 @@ jobs:
           mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linux64/filesystem_stdio.so
           mv rehlds/lib/linux64/libsteam_api.so publish/bin/linux64/libsteam_api.so
 
+      - name: Run GLIBC/ABI version compat test
+        run: |
+          binaries=(
+            "publish/bin/linux64/engine_i486.so"
+            "publish/bin/linux64/hlds_linux"
+            "publish/bin/linux64/hltv"
+            "publish/bin/linux64/core.so"
+            "publish/bin/linux64/proxy.so"
+            "publish/bin/linux64/demoplayer.so"
+            "publish/bin/linux64/valve/dlls/director.so"
+            "publish/bin/linux64/filesystem_stdio.so"
+            "publish/bin/linux64/libsteam_api.so"
+          )
+          # amd64 baseline: GLIBC 2.31 (bullseye, our CI build env).  The C++
+          # ABI surface (GLIBCXX / CXXABI) is locked by -fno-rtti
+          # -fno-exceptions + _GLIBCXX_USE_CXX11_ABI=0 in main + libsteam_api
+          # CMakeLists, so the legacy thresholds from i386 still apply.
+          MAX_GLIBC=2.31 bash ./rehlds/version/glibc_test.sh ${binaries[@]}
+          if [[ $? -ne 0 ]]; then
+            exit 1 # Assertion failed
+          fi
+        shell: bash
+
       - name: Deploy artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -835,6 +858,29 @@ jobs:
           mv build/rehlds/HLTV/Director/director.so publish/bin/linuxarm64/valve/dlls/director.so
           mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linuxarm64/filesystem_stdio.so
           mv rehlds/lib/linuxarm64/libsteam_api.so publish/bin/linuxarm64/libsteam_api.so
+
+      - name: Run GLIBC/ABI version compat test
+        run: |
+          binaries=(
+            "publish/bin/linuxarm64/engine_i486.so"
+            "publish/bin/linuxarm64/hlds_linux"
+            "publish/bin/linuxarm64/hltv"
+            "publish/bin/linuxarm64/core.so"
+            "publish/bin/linuxarm64/proxy.so"
+            "publish/bin/linuxarm64/demoplayer.so"
+            "publish/bin/linuxarm64/valve/dlls/director.so"
+            "publish/bin/linuxarm64/filesystem_stdio.so"
+            "publish/bin/linuxarm64/libsteam_api.so"
+          )
+          # aarch64 baseline: GLIBC 2.31 (bullseye, our CI build env).
+          # aarch64 itself first appeared at glibc 2.17, so anything below
+          # that is unreachable; 2.31 matches the build env and gives
+          # comfortable headroom for the debian-12 deploy floor (2.36).
+          MAX_GLIBC=2.31 bash ./rehlds/version/glibc_test.sh ${binaries[@]}
+          if [[ $? -ne 0 ]]; then
+            exit 1 # Assertion failed
+          fi
+        shell: bash
 
       - name: Deploy artifacts
         uses: actions/upload-artifact@v4

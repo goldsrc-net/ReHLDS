@@ -73,6 +73,8 @@ set_target_properties(libsteam_api_shim PROPERTIES
 target_compile_options(libsteam_api_shim PRIVATE
     -fvisibility=hidden
     -fvisibility-inlines-hidden
+    -fno-rtti
+    -fno-exceptions
     -Wall -Wno-invalid-offsetof
     ${ARCH_BITNESS_FLAG}
 )
@@ -91,6 +93,15 @@ target_include_directories(libsteam_api_shim PRIVATE
 # anyway for explicitness, but this keeps the headers' own decls consistent).
 target_compile_definitions(libsteam_api_shim PRIVATE
     _GNU_SOURCE
+    # Match the rest of ReHLDS's libstdc++ ABI surface (set in
+    # rehlds/CMakeLists.txt:292): use the pre-C++11 dual ABI for
+    # std::string / std::list.  Combined with -fno-rtti -fno-exceptions
+    # above, this keeps the shim's referenced CXXABI symbols at the same
+    # legacy version as engine_i486.so / hlds_linux / HLTV binaries
+    # (CXXABI_1.3, well under the 1.3.5 threshold).  Without this,
+    # bullseye-class CI's gcc-10 libstdc++ on i386 multilib pulls in
+    # CXXABI_1.3.9 symbols and trips glibc_test.sh.
+    _GLIBCXX_USE_CXX11_ABI=0
 )
 
 target_link_libraries(libsteam_api_shim PRIVATE

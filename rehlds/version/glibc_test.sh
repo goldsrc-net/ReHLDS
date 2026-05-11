@@ -4,10 +4,13 @@ main()
 {
 	files=($@)
 
+	# Thresholds can be overridden per-arch via env vars; defaults are the
+	# legacy i386 / CentOS-5-era compat promise (no caller passed env =
+	# behaviour matches every existing invocation).
 	declare -A threshold_version
-	threshold_version[CXXABI]="1.3.5"
-	threshold_version[GLIBCXX]="3.4.15"
-	threshold_version[GLIBC]="2.11"
+	threshold_version[CXXABI]="${MAX_CXXABI:-1.3.5}"
+	threshold_version[GLIBCXX]="${MAX_GLIBCXX:-3.4.15}"
+	threshold_version[GLIBC]="${MAX_GLIBC:-2.11}"
 
 	for k in "${!threshold_version[@]}"; do
 		for f in "${files[@]}"
