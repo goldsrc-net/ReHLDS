@@ -70,16 +70,58 @@ set_target_properties(libsteam_api_shim PROPERTIES
 # Default visibility hidden — the shim's exports are individually annotated
 # with __attribute__((visibility("default"))). This avoids leaking C++ runtime
 # symbols and matches the legacy lib's narrow export surface.
+# Mirror the full set of ABI-affecting flags the engine target uses
+# (rehlds/CMakeLists.txt lines 35,38,41,46,68-89).  Without these, gcc-10
+# libstdc++ on bullseye-class CI emits CXXABI_1.3.9 references for things
+# like C++14 sized operator delete, thread-safe static destructors, and
+# FORTIFY_SOURCE-checked libc calls that trip glibc_test.sh.
 target_compile_options(libsteam_api_shim PRIVATE
+    # Narrow export surface — shim's visible symbols are individually
+    # annotated with __attribute__((visibility("default"))).
     -fvisibility=hidden
     -fvisibility-inlines-hidden
+    # No C++ runtime baggage (RTTI / exception unwinding tables).
     -fno-rtti
     -fno-exceptions
+    # Disable C++14 sized operator delete (_ZdlPvm / _ZdaPvm) which is
+    # versioned at CXXABI_1.3.9 in gcc-5+ libstdc++.
+    -fno-sized-deallocation
+    # Disable libc FORTIFY runtime checks (would pull __memcpy_chk etc.
+    # at GLIBC_2.16+).
+    -U_FORTIFY_SOURCE
+    -DFORTIFY_SOURCE=0
+    # Permissive C++ / no stack canary / no CF protection — match engine.
+    -fpermissive
+    -fno-stack-protector
+    -fno-strict-aliasing
+    -fno-strict-overflow
+    # Section-per-symbol for the linker's -Wl,-gc-sections (below) to
+    # drop dead code that would otherwise drag in CXXABI_1.3.9 refs.
+    -ffunction-sections
+    -fdata-sections
     -Wall -Wno-invalid-offsetof
     ${ARCH_BITNESS_FLAG}
 )
+
+# GCC-only flags (silently skip on clang).  Engine's CMakeLists gates these
+# the same way (rehlds/CMakeLists.txt:77-83).
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(libsteam_api_shim PRIVATE
+        -fno-plt
+    )
+    if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
+        target_compile_options(libsteam_api_shim PRIVATE
+            -fcf-protection=none
+        )
+    endif()
+endif()
+
 target_link_options(libsteam_api_shim PRIVATE
     ${ARCH_BITNESS_FLAG}
+    # Dead-code-strip unused symbols (paired with -ffunction-sections
+    # -fdata-sections above).  Engine uses the same flag at
+    # rehlds/CMakeLists.txt:93-94.
+    -Wl,--gc-sections
 )
 
 target_include_directories(libsteam_api_shim PRIVATE
