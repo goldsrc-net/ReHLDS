@@ -206,7 +206,7 @@ void CFileSystem_Stdio::GetInterfaceVersion(char *p, int maxlen)
 
 WaitForResourcesHandle_t CFileSystem_Stdio::WaitForResources(const char *resourcelist)
 {
-	return (WaitForResourcesHandle_t)FILESYSTEM_INVALID_HANDLE;
+	return INVALID_WAITFORRESOURCES_HANDLE;
 }
 
 bool CFileSystem_Stdio::GetWaitForResourcesProgress(WaitForResourcesHandle_t handle, float *progress, bool *complete)

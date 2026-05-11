@@ -72,6 +72,7 @@ typedef enum
 } FileWarningLevel_t;
 
 const FileHandle_t FILESYSTEM_INVALID_HANDLE = nullptr;
+const WaitForResourcesHandle_t INVALID_WAITFORRESOURCES_HANDLE = 0;
 
 #endif // FILESYSTEM_INTERNAL_H
 
