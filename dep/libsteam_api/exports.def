@@ -19,7 +19,11 @@
 ; Win32 export table. The Linux build keeps it (the engine doesn't call
 ; it but it round-trips through SteamAPI_Init's interface acquisition).
 
-LIBRARY steam_api
+; LIBRARY directive omitted on purpose: the vcxproj's TargetName picks
+; the per-arch DLL name (steam_api on Win32, steam_api64 on x64).  With
+; LIBRARY hardcoded, the linker embedded that name into the x64 import
+; lib's DLL reference, so consumers ended up loading steam_api.dll at
+; runtime even though we shipped steam_api64.dll — STATUS_DLL_NOT_FOUND.
 
 EXPORTS
     GetHSteamPipe                                  @1
