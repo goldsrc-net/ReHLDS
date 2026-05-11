@@ -161,7 +161,7 @@ int EXT_FUNC PM_PointContents(vec_t *p, int *truecontents)
 	g_engdstAddrs.PM_PointContents(&p, &truecontents);
 #endif
 
-	if ((int)pmove->physents[0].model != -208)
+	if ((intptr_t)pmove->physents[0].model != -208)
 	{
 		int entityContents = PM_HullPointContents(
 			pmove->physents[0].model->hulls,
@@ -209,7 +209,7 @@ int PM_WaterEntity(vec_t *p)
 
 int EXT_FUNC PM_TruePointContents(vec_t *p)
 {
-	if ((int)pmove->physents[0].model == -208)
+	if ((intptr_t)pmove->physents[0].model == -208)
 		return -1;
 	else
 		return PM_HullPointContents(pmove->physents[0].model->hulls, pmove->physents[0].model->hulls[0].firstclipnode, p);
