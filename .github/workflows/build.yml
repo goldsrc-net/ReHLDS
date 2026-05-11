@@ -569,6 +569,12 @@ jobs:
           mv build/rehlds/HLTV/DemoPlayer/demoplayer.so publish/bin/linux32/demoplayer.so
           mv build/rehlds/HLTV/Director/director.so publish/bin/linux32/valve/dlls/director.so
           mv build/rehlds/filesystem/FileSystem_Stdio/filesystem_stdio.so publish/bin/linux32/filesystem_stdio.so
+          # libsteam_api shim built by dep/libsteam_api/ via ARCH_LIB_DIR;
+          # routed to rehlds/lib/linux32/.  engine_i486.so links against
+          # SteamGameServer_Init exported from this shim; the i386 release
+          # was missing it (sister linux64 / linuxarm64 / win32 / win64
+          # jobs all already ship their equivalent).
+          mv rehlds/lib/linux32/libsteam_api.so publish/bin/linux32/libsteam_api.so
 
       - name: Run GLIBC/ABI version compat test
         run: |
@@ -581,6 +587,7 @@ jobs:
             "publish/bin/linux32/demoplayer.so"
             "publish/bin/linux32/valve/dlls/director.so"
             "publish/bin/linux32/filesystem_stdio.so"
+            "publish/bin/linux32/libsteam_api.so"
           )
           bash ./rehlds/version/glibc_test.sh ${binaries[@]}
           if [[ $? -ne 0 ]]; then
