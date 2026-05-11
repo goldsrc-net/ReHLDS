@@ -838,6 +838,11 @@ jobs:
   publish:
     name: 'Publish'
     runs-on: ubuntu-24.04
+    # Needed for softprops/action-gh-release to update the release via
+    # PATCH /repos/{owner}/{repo}/releases/{id}.  goldsrc-net's default
+    # GITHUB_TOKEN is read-only, so we declare the write scope explicitly.
+    permissions:
+      contents: write
     needs: [windows, windows-amd64, testdemos, linux, linux-amd64, linux-arm64]
 
     steps:
