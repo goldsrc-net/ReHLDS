@@ -37,6 +37,9 @@ else()
 		-fpermissive -fno-sized-deallocation\
 		-Wno-unused-result -Wno-unknown-pragmas\
 		-Wno-write-strings -Wno-strict-aliasing")
+	# -flto at link is required for clang (its driver doesn't auto-route
+	# bitcode .o files through an LTO-aware linker; gcc's driver does).
+	set(LINK_FLAGS "${LINK_FLAGS} -flto")
 endif()
 
 # GCC >= 8.3

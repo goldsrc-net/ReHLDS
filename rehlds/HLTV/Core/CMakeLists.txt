@@ -46,6 +46,9 @@ else()
 			set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-stringop-truncation -Wno-format-truncation")
 		endif()
 	endif()
+	# -flto at link is required for clang (its driver doesn't auto-route
+	# bitcode .o files through an LTO-aware linker; gcc's driver does).
+	set(LINK_FLAGS "${LINK_FLAGS} -flto")
 endif()
 
 # GCC >= 8.3

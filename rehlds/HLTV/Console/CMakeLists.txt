@@ -55,6 +55,9 @@ else()
  	if (NOT "$ENV{CXX}" MATCHES "clang" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 8.0)
 		set(COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-stringop-truncation -Wno-format-truncation")
 	endif()
+	# -flto at link is required for clang (its driver doesn't auto-route
+	# bitcode .o files through an LTO-aware linker; gcc's driver does).
+	set(LINK_FLAGS "${LINK_FLAGS} -flto")
 endif()
 
 # GCC >= 8.3
