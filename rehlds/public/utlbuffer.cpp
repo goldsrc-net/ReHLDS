@@ -245,7 +245,7 @@ int CUtlBuffer::VaScanf(char const* pFmt, va_list list)
 				*i = strtol((char*)PeekGet(), &pEnd, 10);
 				if (pEnd == PeekGet())
 					return numScanned;
-				m_Get = (int)pEnd - (int)Base();
+				m_Get = (int)(pEnd - (char*)Base());
 			}
 				break;
 
@@ -255,7 +255,7 @@ int CUtlBuffer::VaScanf(char const* pFmt, va_list list)
 				*i = strtol((char*)PeekGet(), &pEnd, 16);
 				if (pEnd == PeekGet())
 					return numScanned;
-				m_Get = (int)pEnd - (int)Base();
+				m_Get = (int)(pEnd - (char*)Base());
 			}
 				break;
 
@@ -265,7 +265,7 @@ int CUtlBuffer::VaScanf(char const* pFmt, va_list list)
 				*u = strtoul((char*)PeekGet(), &pEnd, 10);
 				if (pEnd == PeekGet())
 					return numScanned;
-				m_Get = (int)pEnd - (int)Base();
+				m_Get = (int)(pEnd - (char*)Base());
 			}
 				break;
 
@@ -275,7 +275,7 @@ int CUtlBuffer::VaScanf(char const* pFmt, va_list list)
 				*f = (float)strtod((char*)PeekGet(), &pEnd);
 				if (pEnd == PeekGet())
 					return numScanned;
-				m_Get = (int)pEnd - (int)Base();
+				m_Get = (int)(pEnd - (char*)Base());
 			}
 				break;
 
