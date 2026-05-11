@@ -91,6 +91,12 @@ jobs:
         run: |
           choco install rcedit -y
 
+      - name: Prepare HLSDK
+        # Cross-platform staging — same script the Linux jobs use.  Git
+        # Bash is on the windows-2025 runner's PATH.
+        shell: bash
+        run: bash rehlds/version/prepare-hlsdk.sh publish
+
       - name: Move files
         shell: cmd
         run: |
@@ -282,6 +288,10 @@ jobs:
         shell: pwsh
         run: |
           choco install rcedit -y
+
+      - name: Prepare HLSDK
+        shell: bash
+        run: bash rehlds/version/prepare-hlsdk.sh publish
 
       - name: Move files
         shell: cmd
@@ -544,13 +554,7 @@ jobs:
           rm -rf build && cmake -B build && cmake --build build -j8
 
       - name: Prepare HLSDK
-        run: |
-          mkdir -p publish/hlsdk
-          rsync -a rehlds/common/ publish/hlsdk/common/
-          rsync -a rehlds/dlls/ publish/hlsdk/dlls/
-          rsync -a rehlds/pm_shared/ publish/hlsdk/pm_shared/
-          rsync -a rehlds/public/ publish/hlsdk/public/ --exclude rehlds/
-          rsync -a rehlds/public/rehlds/ publish/hlsdk/engine
+        run: bash rehlds/version/prepare-hlsdk.sh publish
 
       - name: Move files
         run: |
@@ -686,6 +690,9 @@ jobs:
           rm -rf build && cmake -B build -DBUILD_AMD64=ON -DCMAKE_BUILD_TYPE=Release \
             && cmake --build build -j$(nproc)
 
+      - name: Prepare HLSDK
+        run: bash rehlds/version/prepare-hlsdk.sh publish
+
       - name: Move files
         run: |
           mkdir -p publish/bin/linux64/valve/dlls
@@ -804,6 +811,9 @@ jobs:
         run: |
           rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Release \
             && cmake --build build -j$(nproc)
+
+      - name: Prepare HLSDK
+        run: bash rehlds/version/prepare-hlsdk.sh publish
 
       - name: Move files
         run: |
