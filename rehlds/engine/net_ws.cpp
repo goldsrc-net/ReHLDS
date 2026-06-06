@@ -1659,8 +1659,10 @@ void NET_OpenIP()
 
 #ifdef REHLDS_QUIC
 		// Attach the QUIC/WebTransport layer to the shared game socket.
-		// WT_ServerInit returns FALSE (QUIC stays disabled) if no cert
-		// files are present; the UDP path is unaffected either way.
+		// Certs come from quic_cert.pem/quic_key.pem when present, else a
+		// self-signed cert is generated and auto-rotated; WT_ServerInit
+		// only fails (QUIC stays disabled) on broken operator-provided
+		// files. The UDP path is unaffected either way.
 		if (ip_sockets[NS_SERVER] != INV_SOCK && WT_ServerInit())
 			WT_ServerSetSocket(ip_sockets[NS_SERVER], port);
 #endif // REHLDS_QUIC

@@ -74,8 +74,10 @@ typedef struct wt_server_s
 	int		client_count;
 
 	// Certificate SHA-256 hash (64 hex chars + null) for browser
-	// serverCertificateHashes pinning
+	// serverCertificateHashes pinning; prev_cert_hash holds the
+	// pre-rotation hash so discovery can offer a grace window
 	char		cert_hash[65];
+	char		prev_cert_hash[65];
 } wt_server_t;
 
 qboolean WT_ServerInit();				// Load certs + build configs; no socket yet
