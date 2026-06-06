@@ -24,6 +24,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/../cmake/ArchFlags.cmake)
 
 option(DEBUG "Build with debug information." OFF)
 option(USE_STATIC_LIBSTDC "Enables static linking libstdc++." OFF)
+option(ENABLE_QUIC "Enable QUIC/WebTransport transport (requires Rust toolchain to build dep/quiche)." OFF)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -335,6 +336,62 @@ endif()
 # ASMLIB_H is undefined.
 if (ARCH_IS_X86_32)
 	target_link_libraries(engine PRIVATE aelf32)
+endif()
+
+# QUIC/WebTransport transport — quiche (Rust, vendored BoringSSL statically
+# linked) built via cargo, pinned as a submodule at dep/quiche @ 0.24.6.
+# Steam/UDP clients are unaffected; QUIC is demultiplexed per-packet off the
+# shared game socket (see engine/net_webtransport.cpp). OFF by default so the
+# upstream-aligned i386 build doesn't grow a Rust toolchain dependency.
+if (ENABLE_QUIC)
+	set(QUICHE_ROOT ${PROJECT_SOURCE_DIR}/../dep/quiche)
+
+	# Map the ArchFlags fan-out onto Rust target triples
+	if (ARCH_LIB_DIR STREQUAL "linux32")
+		set(QUICHE_RUST_TARGET i686-unknown-linux-gnu)
+	elseif (ARCH_LIB_DIR STREQUAL "linuxarm64")
+		set(QUICHE_RUST_TARGET aarch64-unknown-linux-gnu)
+	else()
+		set(QUICHE_RUST_TARGET x86_64-unknown-linux-gnu)
+	endif()
+
+	set(QUICHE_LIB ${QUICHE_ROOT}/target/${QUICHE_RUST_TARGET}/release/libquiche.a)
+
+	# Cross-build plumbing for cargo + the cc crate (BoringSSL's C/C++ parts).
+	# Mirrors the env the xash3d-fwgs build environment used for the same lib.
+	if (ARCH_LIB_DIR STREQUAL "linux32")
+		set(QUICHE_CARGO_ENV
+			CC_i686_unknown_linux_gnu=gcc
+			CXX_i686_unknown_linux_gnu=g++
+			CFLAGS_i686_unknown_linux_gnu=-m32
+			CXXFLAGS_i686_unknown_linux_gnu=-m32
+			CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=gcc
+			"CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_RUSTFLAGS=-C link-arg=-m32")
+	elseif (ARCH_LIB_DIR STREQUAL "linuxarm64")
+		set(QUICHE_CARGO_ENV
+			CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+			CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+			CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc)
+	else()
+		set(QUICHE_CARGO_ENV)
+	endif()
+
+	# cargo is incremental and owns its own dependency tracking; CMake only
+	# re-invokes it when libquiche.a is missing. After bumping the dep/quiche
+	# pin, `rm -rf dep/quiche/target` (or just rebuild from clean).
+	add_custom_command(OUTPUT ${QUICHE_LIB}
+		COMMAND ${CMAKE_COMMAND} -E env ${QUICHE_CARGO_ENV}
+			cargo build --release --features ffi --target ${QUICHE_RUST_TARGET}
+		WORKING_DIRECTORY ${QUICHE_ROOT}/quiche
+		COMMENT "Building quiche (${QUICHE_RUST_TARGET}) via cargo"
+		VERBATIM)
+	add_custom_target(quiche_build DEPENDS ${QUICHE_LIB})
+	add_dependencies(engine quiche_build)
+
+	target_compile_definitions(engine PRIVATE REHLDS_QUIC)
+	target_include_directories(engine PRIVATE ${QUICHE_ROOT}/quiche/include)
+	target_sources(engine PRIVATE engine/net_webtransport.cpp)
+	target_link_libraries(engine PRIVATE ${QUICHE_LIB} pthread)
 endif()
 
 if (USE_STATIC_LIBSTDC)

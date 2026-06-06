@@ -28,6 +28,10 @@
 
 #include "precompiled.h"
 
+#ifdef REHLDS_QUIC
+#include "net_webtransport.h"
+#endif
+
 qboolean net_thread_initialized;
 
 loopback_t loopbacks[2];
@@ -937,6 +941,22 @@ qboolean NET_QueuePacket(netsrc_t sock)
 		}
 #endif // REHLDS_FIXES
 
+#ifdef REHLDS_QUIC
+		// Divert QUIC/WebTransport traffic before it reaches the game path.
+		// Matches established WT client addresses and QUIC long-header packets
+		// only; 0xFFFFFFFF connectionless and netchan packets never match, so
+		// the regular Steam/UDP path is untouched.
+		if (sock == NS_SERVER && (WT_IsClientAddr(&in_from) || WT_IsQuicInitial(buf, ret)))
+		{
+			WT_ProcessIncomingPacket(buf, ret, &in_from);
+#ifdef REHLDS_FIXES
+			continue;	// packet consumed by the QUIC layer; keep draining the socket
+#else // REHLDS_FIXES
+			return FALSE;	// packet consumed by the QUIC layer
+#endif // REHLDS_FIXES
+		}
+#endif // REHLDS_QUIC
+
 		NET_TransferRawData(&in_message, buf, ret);
 
 		if (*(int32 *)in_message.data != NET_HEADER_FLAG_SPLITPACKET)
@@ -1216,6 +1236,28 @@ qboolean NET_GetPacket(netsrc_t sock)
 
 	NET_AdjustLag();
 	NET_ThreadLock();
+
+#ifdef REHLDS_QUIC
+	if (sock == NS_SERVER)
+	{
+		// Pump QUIC timeouts/retransmissions, then deliver any tunneled
+		// datagrams as regular game packets (real client netadr_t preserved,
+		// so bans, rate limits and netchan routing work unchanged).
+		WT_ServerFrame();
+
+		int wt_len = 0;
+		if (WT_ServerRecvDatagram(in_message.data, &wt_len, &in_from, NULL))
+		{
+			in_message.cursize = wt_len;
+			Q_memcpy(net_message.data, in_message.data, in_message.cursize);
+			net_message.cursize = in_message.cursize;
+			Q_memcpy(&net_from, &in_from, sizeof(netadr_t));
+			NET_ThreadUnlock();
+			return TRUE;
+		}
+	}
+#endif // REHLDS_QUIC
+
 	if (NET_GetLoopPacket(sock, &in_from, &in_message))
 	{
 		bret = NET_LagPacket(TRUE, sock, &in_from, &in_message);
@@ -1381,6 +1423,14 @@ void NET_SendPacket(netsrc_t sock, int length, void *data, const netadr_t& to)
 		NET_SendLoopPacket(sock, length, data, to);
 		return;
 	}
+
+#ifdef REHLDS_QUIC
+	// WebTransport clients are tracked by address; tunnel their traffic
+	// through QUIC datagrams (before the splitpacket path - QUIC handles
+	// its own segmentation). Falls through to raw UDP for everyone else.
+	if (sock == NS_SERVER && to.type == NA_IP && WT_ServerSendToAddr(&to, data, length))
+		return;
+#endif // REHLDS_QUIC
 
 	SOCKET net_socket;
 	if (to.type == NA_BROADCAST)
@@ -1606,6 +1656,14 @@ void NET_OpenIP()
 			Sys_Error("%s: Couldn't allocate dedicated server IP port %d.", __func__, port);
 		}
 		sv_port = port;
+
+#ifdef REHLDS_QUIC
+		// Attach the QUIC/WebTransport layer to the shared game socket.
+		// WT_ServerInit returns FALSE (QUIC stays disabled) if no cert
+		// files are present; the UDP path is unaffected either way.
+		if (ip_sockets[NS_SERVER] != INV_SOCK && WT_ServerInit())
+			WT_ServerSetSocket(ip_sockets[NS_SERVER], port);
+#endif // REHLDS_QUIC
 	}
 
 	NET_ThreadUnlock();
@@ -1890,6 +1948,11 @@ void NET_Config(qboolean multiplayer)
 	else
 	{
 		NET_ThreadLock();
+
+#ifdef REHLDS_QUIC
+		// Tear down QUIC state before the shared game socket goes away
+		WT_ServerShutdown();
+#endif // REHLDS_QUIC
 
 		for (int sock = 0; sock < NS_MAX; sock++)
 		{
