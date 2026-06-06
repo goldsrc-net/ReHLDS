@@ -28,6 +28,10 @@
 
 #include "precompiled.h"
 
+#ifdef REHLDS_QUIC
+#include "sv_xashmaster.h"
+#endif
+
 typedef struct full_packet_entities_s
 {
 	int num_entities;
@@ -3728,6 +3732,14 @@ void SV_ConnectionlessPacket(void)
 	{
 		Con_NetPrintf("A2A_ACK from %s\n", NET_AdrToString(net_from));
 	}
+#ifdef REHLDS_QUIC
+	// xash3d-master heartbeat challenge ('s' + master_challenge + our echo);
+	// must come before the M2A_CHALLENGE ignore below
+	else if (c[0] == M2A_CHALLENGE && (c[1] == 0 || c[1] == '\n') && XashMaster_IsMasterAdr(net_from))
+	{
+		XashMaster_ChallengeResponse();
+	}
+#endif // REHLDS_QUIC
 	else if (c[0] == A2A_GETCHALLENGE || c[0] == A2S_INFO || c[0] == A2S_PLAYER || c[0] == A2S_RULES ||
 		c[0] == S2A_LOGSTRING || c[0] == M2S_REQUESTRESTART || c[0] == M2A_CHALLENGE)
 		return;
@@ -8197,6 +8209,9 @@ void EXT_FUNC SV_Frame_Internal()
 	SV_CheckMapDifferences();
 	SV_GatherStatistics();
 	Steam_RunFrame();
+#ifdef REHLDS_QUIC
+	XashMaster_Frame();
+#endif
 }
 
 void SV_Drop_f(void)
@@ -8291,6 +8306,9 @@ void SV_InitEncoders(void)
 
 void SV_Init(void)
 {
+#ifdef REHLDS_QUIC
+	XashMaster_Init();
+#endif
 	Cmd_AddCommand("banid", SV_BanId_f);
 	Cmd_AddCommand("removeid", SV_RemoveId_f);
 	Cmd_AddCommand("listid", SV_ListId_f);
@@ -8491,6 +8509,9 @@ void SV_Init(void)
 
 void SV_Shutdown(void)
 {
+#ifdef REHLDS_QUIC
+	XashMaster_Shutdown();
+#endif
 #if (defined(REHLDS_OPT_PEDANTIC) || defined(REHLDS_FIXES)) && defined REHLDS_JIT
 	g_DeltaJitRegistry.Cleanup();
 #endif

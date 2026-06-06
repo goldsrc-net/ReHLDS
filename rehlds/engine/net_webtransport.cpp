@@ -1457,6 +1457,18 @@ int WT_ServerGetClientCount()
 
 /*
 ==================
+WT_ServerIsActive
+
+QUIC/WebTransport is attached to the game socket and accepting connections
+==================
+*/
+qboolean WT_ServerIsActive()
+{
+	return wt_server.initialized;
+}
+
+/*
+==================
 WT_ServerDisconnectClient
 
 Disconnect a specific client

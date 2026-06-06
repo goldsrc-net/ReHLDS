@@ -91,5 +91,6 @@ qboolean WT_ServerSendToAddr(const netadr_t *to, const void *data, int len);	// 
 qboolean WT_ServerRecvDatagram(void *data, int *len, netadr_t *from, int *client_id);
 int WT_ServerGetClientCount();
 void WT_ServerDisconnectClient(int client_id);
+qboolean WT_ServerIsActive();			// QUIC attached to the game socket and accepting
 
 #endif // REHLDS_QUIC

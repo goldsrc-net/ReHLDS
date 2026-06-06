@@ -390,7 +390,10 @@ if (ENABLE_QUIC)
 
 	target_compile_definitions(engine PRIVATE REHLDS_QUIC)
 	target_include_directories(engine PRIVATE ${QUICHE_ROOT}/quiche/include)
-	target_sources(engine PRIVATE engine/net_webtransport.cpp)
+	target_sources(engine PRIVATE
+		engine/net_webtransport.cpp
+		engine/sv_xashmaster.cpp
+	)
 	target_link_libraries(engine PRIVATE ${QUICHE_LIB} pthread)
 endif()
 
