@@ -94,5 +94,7 @@ qboolean WT_ServerRecvDatagram(void *data, int *len, netadr_t *from, int *client
 int WT_ServerGetClientCount();
 void WT_ServerDisconnectClient(int client_id);
 qboolean WT_ServerIsActive();			// QUIC attached to the game socket and accepting
+const char *WT_GetCertHash();			// current cert SHA-256 hex ("" if unset)
+const char *WT_GetPrevCertHash();		// pre-rotation hash for the grace window
 
 #endif // REHLDS_QUIC

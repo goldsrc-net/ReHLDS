@@ -30,6 +30,7 @@
 
 #ifdef REHLDS_QUIC
 #include "sv_xashmaster.h"
+#include "net_webtransport.h"
 #endif
 
 typedef struct full_packet_entities_s
@@ -2463,7 +2464,16 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 		client->netchan.remote_address.port = adr.port ? adr.port : port;
 		if (!Steam_NotifyClientConnect(client, szSteamAuthBuf, len))
 		{
-			if (sv_lan.value == 0.0f)
+			qboolean allowNoSteam = sv_lan.value != 0.0f;
+#ifdef REHLDS_QUIC
+			// WebTransport clients are browsers: they categorically have
+			// no Steam context, so a ticket failure is the expected case.
+			// Admit them like LAN clients (SteamID 0). UDP clients are
+			// unaffected - they never match WT_IsClientAddr.
+			if (!allowNoSteam && WT_IsClientAddr(&adr))
+				allowNoSteam = TRUE;
+#endif
+			if (!allowNoSteam)
 			{
 				SV_RejectConnection(&adr, "STEAM validation rejected\n");
 				return;

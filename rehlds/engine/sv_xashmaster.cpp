@@ -125,9 +125,19 @@ Send a heartbeat to the configured master if it's due
 void XashMaster_Frame()
 {
 	unsigned char buf[6];
+	static char s_last_sent_hash[65];
 
 	if (!g_psv.active || !sv_xashmaster.string[0])
 		return;
+
+	// re-announce immediately when the cert rotates so the master
+	// (and web clients) learn the new hash without waiting out the
+	// normal heartbeat interval
+	if (Q_strcmp(s_last_sent_hash, WT_GetCertHash()) != 0)
+	{
+		Q_strcpy(s_last_sent_hash, WT_GetCertHash());
+		s_last_heartbeat = -99999.0;
+	}
 
 	if (realtime - s_last_heartbeat < XASHMASTER_HEARTBEAT_SECONDS)
 		return;
@@ -199,6 +209,7 @@ void XashMaster_ChallengeResponse()
 	Info_SetValueForKey(s, "bots", va("%i", SV_GetFakeClientCount()), len);
 	Info_SetValueForKey(s, "gamedir", gd, len);
 	Info_SetValueForKey(s, "map", g_psv.name, len);
+	Info_SetValueForKey(s, "host", Cvar_VariableString("hostname"), len);
 	Info_SetValueForKey(s, "type", "d", len);
 	Info_SetValueForKey(s, "password", hasPW ? "1" : "0", len);
 #ifdef _WIN32
@@ -215,6 +226,14 @@ void XashMaster_ChallengeResponse()
 	Info_SetValueForKey(s, "product", gd, len);
 	Info_SetValueForKey(s, "nat", "0", len);
 	Info_SetValueForKey(s, "quic", WT_ServerIsActive() ? "1" : "0", len);
+	// cert hashes ride the heartbeat so web clients can pin before
+	// connecting; certhash2 covers the rotation grace window
+	if (WT_ServerIsActive() && WT_GetCertHash()[0])
+	{
+		Info_SetValueForKey(s, "certhash", WT_GetCertHash(), len);
+		if (WT_GetPrevCertHash()[0])
+			Info_SetValueForKey(s, "certhash2", WT_GetPrevCertHash(), len);
+	}
 
 	NET_SendPacket(NS_SERVER, Q_strlen(s), s, net_from);
 }

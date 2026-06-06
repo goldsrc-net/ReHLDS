@@ -62,10 +62,6 @@ extern int SSL_CTX_use_PrivateKey(SSL_CTX *ctx, EVP_PKEY *pkey);
 extern int SSL_CTX_check_private_key(const SSL_CTX *ctx);
 extern SSL *SSL_new(SSL_CTX *ctx);
 extern void SSL_free(SSL *ssl);
-extern BIO *BIO_new_mem_buf(const void *buf, int len);
-extern void BIO_free(BIO *bio);
-extern X509 *PEM_read_bio_X509(BIO *bio, X509 **x, void *cb, void *u);
-extern EVP_PKEY *PEM_read_bio_PrivateKey(BIO *bio, EVP_PKEY **pkey, void *cb, void *u);
 extern void X509_free(X509 *cert);
 extern void EVP_PKEY_free(EVP_PKEY *pkey);
 extern int SSL_CTX_set_min_proto_version(SSL_CTX *ctx, int version);
@@ -103,6 +99,11 @@ extern int X509_NAME_add_entry_by_txt(X509_NAME *name, const char *field, int ty
 extern int X509_set_issuer_name(X509 *x509, X509_NAME *name);
 extern int X509_set_pubkey(X509 *x509, EVP_PKEY *pkey);
 extern int X509_sign(X509 *x509, EVP_PKEY *pkey, const void *md);
+
+typedef struct X509_extension_st X509_EXTENSION;
+extern X509_EXTENSION *X509V3_EXT_nconf_nid(void *conf, void *ctx, int ext_nid, const char *value);
+extern int X509_add_ext(X509 *x509, const X509_EXTENSION *ex, int loc);
+extern void X509_EXTENSION_free(X509_EXTENSION *ex);
 }
 
 #define TLS1_3_VERSION 0x0304
@@ -113,20 +114,19 @@ extern int X509_sign(X509 *x509, EVP_PKEY *pkey, const void *md);
 #define WT_TIMEOUT_MS 30000
 #define WT_MAX_PENDING_DATAGRAMS 64
 
-// Optional operator-provided PEM files in the server's working directory
-// (HLDS install root) — e.g. a CA-issued cert, renewed externally by certbot.
-// When absent, a self-signed P-256 certificate is generated in-process and
-// rotated automatically: browsers cap serverCertificateHashes-pinned certs
-// at 14 days validity, so permanently-running servers regenerate half-way.
-#define WT_CERT_FILE "quic_cert.pem"
-#define WT_KEY_FILE  "quic_key.pem"
-
+// Certificates are always self-managed: a self-signed P-256 certificate is
+// generated in-process at startup and rotated automatically (browsers cap
+// serverCertificateHashes-pinned certs at 14 days validity). Clients learn
+// the hash through the master server heartbeat -> discovery API pipeline,
+// so operators provision nothing.
 #define WT_CERT_VALID_SECONDS  (14 * 86400)	// browser-imposed maximum for pinned certs
 #define WT_CERT_ROTATE_SECONDS (7 * 86400)	// regenerate half-way through validity
 
 // BoringSSL constants (no headers; values are ABI-stable)
 #define NID_X9_62_prime256v1 415
 #define MBSTRING_ASC 0x1001
+#define NID_subject_alt_name 85
+#define NID_basic_constraints 87
 
 /*
 ==================
@@ -395,8 +395,7 @@ static int wt_recv_queue_tail = 0;
 // Shared game UDP socket used for QUIC transport
 static int wt_socket = -1;
 
-// Self-managed certificate state (unused in file-provided mode)
-static qboolean wt_cert_generated;	// cert was generated in-process (rotates)
+// Self-managed certificate state
 static double wt_cert_created;		// Sys_FloatTime() at generation
 static double wt_cert_next_check;	// throttle for the rotation age check
 
@@ -585,53 +584,6 @@ static int WT_ALPNSelectCallback(SSL *ssl, const unsigned char **out, unsigned c
 
 /*
 ==================
-WT_LoadTextFile
-
-Read an entire text file into a malloc'd, null-terminated buffer.
-Returns NULL if the file doesn't exist or can't be read.
-==================
-*/
-static char *WT_LoadTextFile(const char *path)
-{
-	FILE *fp;
-	long size;
-	char *buf;
-
-	fp = fopen(path, "rb");
-	if (!fp)
-		return NULL;
-
-	fseek(fp, 0, SEEK_END);
-	size = ftell(fp);
-	fseek(fp, 0, SEEK_SET);
-
-	if (size <= 0 || size > 1024 * 1024)
-	{
-		fclose(fp);
-		return NULL;
-	}
-
-	buf = (char *)malloc(size + 1);
-	if (!buf)
-	{
-		fclose(fp);
-		return NULL;
-	}
-
-	if (fread(buf, 1, size, fp) != (size_t)size)
-	{
-		free(buf);
-		fclose(fp);
-		return NULL;
-	}
-
-	buf[size] = '\0';
-	fclose(fp);
-	return buf;
-}
-
-/*
-==================
 WT_BuildSSLCtx
 
 Build a TLS 1.3 SSL_CTX from a cert/key pair and compute the cert hash.
@@ -676,61 +628,6 @@ static SSL_CTX *WT_BuildSSLCtx(X509 *cert, EVP_PKEY *pkey, char *hash_out)
 
 /*
 ==================
-WT_LoadCertFiles
-
-Parse the operator-provided PEM files. Both files must exist and parse.
-==================
-*/
-static qboolean WT_LoadCertFiles(X509 **out_cert, EVP_PKEY **out_key)
-{
-	char *cert_pem, *key_pem;
-	BIO *bio;
-	X509 *cert = NULL;
-	EVP_PKEY *pkey = NULL;
-
-	cert_pem = WT_LoadTextFile(WT_CERT_FILE);
-	key_pem = WT_LoadTextFile(WT_KEY_FILE);
-	if (!cert_pem || !key_pem)
-	{
-		Con_Printf("WT: ERROR: %s found but %s is missing/unreadable\n",
-			cert_pem ? WT_CERT_FILE : WT_KEY_FILE, cert_pem ? WT_KEY_FILE : WT_CERT_FILE);
-		if (cert_pem) free(cert_pem);
-		if (key_pem) free(key_pem);
-		return FALSE;
-	}
-
-	bio = BIO_new_mem_buf(cert_pem, -1);
-	if (bio)
-	{
-		cert = PEM_read_bio_X509(bio, NULL, NULL, NULL);
-		BIO_free(bio);
-	}
-
-	bio = BIO_new_mem_buf(key_pem, -1);
-	if (bio)
-	{
-		pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
-		BIO_free(bio);
-	}
-
-	free(cert_pem);
-	free(key_pem);
-
-	if (!cert || !pkey)
-	{
-		Con_Printf("WT: ERROR: Failed to parse %s / %s\n", WT_CERT_FILE, WT_KEY_FILE);
-		if (cert) X509_free(cert);
-		if (pkey) EVP_PKEY_free(pkey);
-		return FALSE;
-	}
-
-	*out_cert = cert;
-	*out_key = pkey;
-	return TRUE;
-}
-
-/*
-==================
 WT_GenerateCertPair
 
 Generate a fresh P-256 key and self-signed certificate (14-day validity,
@@ -768,13 +665,38 @@ static qboolean WT_GenerateCertPair(X509 **out_cert, EVP_PKEY **out_key)
 
 	X509_set_version(cert, 2);	// X509v3
 	ASN1_INTEGER_set(X509_get_serialNumber(cert), (long)RandomLong(1, 0x7fffffff));
-	X509_gmtime_adj(X509_getm_notBefore(cert), -300);	// tolerate small clock skew
-	X509_gmtime_adj(X509_getm_notAfter(cert), WT_CERT_VALID_SECONDS);
+	// browsers enforce TOTAL validity (notAfter - notBefore) <= 14 days
+	// for pinned certs, so the clock-skew backdate must come out of the
+	// window, with margin
+	X509_gmtime_adj(X509_getm_notBefore(cert), -300);
+	X509_gmtime_adj(X509_getm_notAfter(cert), WT_CERT_VALID_SECONDS - 3600);
 
 	// identity is established by hash pinning, not by name; CN is cosmetic
 	name = X509_get_subject_name(cert);
 	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char *)"hlds", -1, -1, 0);
 	X509_set_issuer_name(cert, name);	// self-signed
+
+	// Chrome's QUIC certificate parser rejects extension-less certs even
+	// under serverCertificateHashes pinning; mirror the profile openssl
+	// produces (the names themselves are ignored by hash pinning)
+	{
+		static const struct { int nid; const char *value; } exts[] = {
+			{ NID_subject_alt_name, "DNS:hlds" },
+			{ NID_basic_constraints, "critical,CA:TRUE" },
+		};
+		for (size_t i = 0; i < ARRAYSIZE(exts); i++)
+		{
+			X509_EXTENSION *ex = X509V3_EXT_nconf_nid(NULL, NULL, exts[i].nid, exts[i].value);
+			if (!ex)
+			{
+				X509_free(cert);
+				EVP_PKEY_free(pkey);
+				return FALSE;
+			}
+			X509_add_ext(cert, ex, -1);
+			X509_EXTENSION_free(ex);
+		}
+	}
 
 	if (X509_set_pubkey(cert, pkey) != 1 || X509_sign(cert, pkey, EVP_sha256()) == 0)
 	{
@@ -792,9 +714,10 @@ static qboolean WT_GenerateCertPair(X509 **out_cert, EVP_PKEY **out_key)
 ==================
 WT_CreateSSLCtx
 
-Operator-provided PEM files when present (CA-issued certs, renewed
-externally); otherwise a self-generated certificate that WT_ServerFrame
-rotates before the validity cliff.
+Generate the self-signed certificate and build the TLS context. Certs
+are always self-managed: clients learn the hash through the master's
+heartbeat pipeline, so there is nothing for an operator to provision,
+and WT_ServerFrame rotates well before the validity cliff.
 ==================
 */
 static SSL_CTX *WT_CreateSSLCtx(char *hash_out)
@@ -802,31 +725,16 @@ static SSL_CTX *WT_CreateSSLCtx(char *hash_out)
 	X509 *cert = NULL;
 	EVP_PKEY *pkey = NULL;
 	SSL_CTX *ctx;
-	FILE *fp = fopen(WT_CERT_FILE, "rb");
 
-	if (fp)
+	if (!WT_GenerateCertPair(&cert, &pkey))
 	{
-		fclose(fp);
-		// files present but broken is a loud failure, not a silent
-		// fall-through to generated certs the operator didn't ask for
-		if (!WT_LoadCertFiles(&cert, &pkey))
-			return NULL;
-		wt_cert_generated = FALSE;
-		Con_Printf("WT: Using certificate from %s\n", WT_CERT_FILE);
+		Con_Printf("WT: ERROR: Failed to generate certificate\n");
+		return NULL;
 	}
-	else
-	{
-		if (!WT_GenerateCertPair(&cert, &pkey))
-		{
-			Con_Printf("WT: ERROR: Failed to generate certificate\n");
-			return NULL;
-		}
-		wt_cert_generated = TRUE;
-		wt_cert_created = Sys_FloatTime();
-		wt_cert_next_check = 0.0;
-		Con_Printf("WT: Generated self-signed certificate (rotates every %d days)\n",
-			WT_CERT_ROTATE_SECONDS / 86400);
-	}
+	wt_cert_created = Sys_FloatTime();
+	wt_cert_next_check = 0.0;
+	Con_Printf("WT: Generated self-signed certificate (rotates every %d days)\n",
+		WT_CERT_ROTATE_SECONDS / 86400);
 
 	ctx = WT_BuildSSLCtx(cert, pkey, hash_out);
 	X509_free(cert);
@@ -1469,7 +1377,7 @@ void WT_ServerFrame()
 	// permanently-running servers never serve an expired cert (age check
 	// throttled to once a minute)
 	double now_sec = Sys_FloatTime();
-	if (wt_cert_generated && now_sec > wt_cert_next_check)
+	if (now_sec > wt_cert_next_check)
 	{
 		wt_cert_next_check = now_sec + 60.0;
 		if (now_sec - wt_cert_created > WT_CERT_ROTATE_SECONDS)
@@ -1638,6 +1546,24 @@ QUIC/WebTransport is attached to the game socket and accepting connections
 qboolean WT_ServerIsActive()
 {
 	return wt_server.initialized;
+}
+
+/*
+==================
+WT_GetCertHash / WT_GetPrevCertHash
+
+Current and pre-rotation certificate hashes (empty string when unset),
+announced to the master so web clients can pin before connecting
+==================
+*/
+const char *WT_GetCertHash()
+{
+	return wt_server.cert_hash;
+}
+
+const char *WT_GetPrevCertHash()
+{
+	return wt_server.prev_cert_hash;
 }
 
 /*
