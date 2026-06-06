@@ -40,5 +40,6 @@ void XashMaster_Frame();		// periodic heartbeat (call from SV_Frame)
 void XashMaster_Shutdown();		// notify master on server shutdown
 qboolean XashMaster_IsMasterAdr(const netadr_t &adr);
 void XashMaster_ChallengeResponse();	// handle M2S 's' challenge (net_message/net_from)
+void XashMaster_Info();			// answer xash-native "info <proto>" browser query
 
 #endif // REHLDS_QUIC

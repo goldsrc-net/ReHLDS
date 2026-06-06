@@ -3739,6 +3739,14 @@ void SV_ConnectionlessPacket(void)
 	{
 		XashMaster_ChallengeResponse();
 	}
+	// xash desktop clients probe servers from the master list with
+	// "info <protocol>" to fill their server browser. GoldSrc never
+	// dispatched "info" (SVC_Info is NOXREF dead code), so the name
+	// is free; without REHLDS_QUIC it still falls to SVC_GameDllQuery.
+	else if (!Q_strcmp(c, "info"))
+	{
+		XashMaster_Info();
+	}
 #endif // REHLDS_QUIC
 	else if (c[0] == A2A_GETCHALLENGE || c[0] == A2S_INFO || c[0] == A2S_PLAYER || c[0] == A2S_RULES ||
 		c[0] == S2A_LOGSTRING || c[0] == M2S_REQUESTRESTART || c[0] == M2A_CHALLENGE)

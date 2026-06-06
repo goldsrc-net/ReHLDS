@@ -221,6 +221,54 @@ void XashMaster_ChallengeResponse()
 
 /*
 ==================
+XashMaster_Info
+
+Answer the xash-native short info query ("info <protocol>") that xash
+desktop clients send to every server they got from the master, to
+populate the in-game server browser. Reply format mirrors xash3d-fwgs
+SV_Info: "info\n" + infostring. We always answer with our real
+protocol in "p" and let the client decide about compatibility.
+==================
+*/
+void XashMaster_Info()
+{
+	char s[512];
+	unsigned char reply[576];
+	char gd[64];
+	int players;
+	int len_out;
+
+	if (!g_psv.active)
+		return;
+
+	int maxplayers = (int)sv_visiblemaxplayers.value;
+	if (maxplayers < 0)
+		maxplayers = g_psvs.maxclients;
+
+	SV_CountPlayers(&players);
+	COM_FileBase(com_gamedir, gd);
+
+	qboolean hasPW = sv_password.string[0] && Q_stricmp(sv_password.string, "none") != 0;
+
+	s[0] = '\0';
+	const int len = sizeof(s);
+	Info_SetValueForKey(s, "p", va("%i", PROTOCOL_VERSION), len);
+	Info_SetValueForKey(s, "map", g_psv.name, len);
+	Info_SetValueForKey(s, "dm", Cvar_VariableValue("deathmatch") != 0.0f ? "1" : "0", len);
+	Info_SetValueForKey(s, "team", Cvar_VariableValue("teamplay") != 0.0f ? "1" : "0", len);
+	Info_SetValueForKey(s, "coop", Cvar_VariableValue("coop") != 0.0f ? "1" : "0", len);
+	Info_SetValueForKey(s, "numcl", va("%i", players - SV_GetFakeClientCount()), len);
+	Info_SetValueForKey(s, "maxcl", va("%i", maxplayers), len);
+	Info_SetValueForKey(s, "gamedir", gd, len);
+	Info_SetValueForKey(s, "password", hasPW ? "1" : "0", len);
+	Info_SetValueForKey(s, "host", Cvar_VariableString("hostname"), len);
+
+	len_out = Q_snprintf((char *)reply, sizeof(reply), "\xff\xff\xff\xffinfo\n%s", s);
+	NET_SendPacket(NS_SERVER, len_out, reply, net_from);
+}
+
+/*
+==================
 XashMaster_Shutdown
 
 Tell the master we're going away (S2M_SHUTDOWN "b\n")
