@@ -393,8 +393,13 @@ if (ENABLE_QUIC)
 	target_sources(engine PRIVATE
 		engine/net_webtransport.cpp
 		engine/sv_xashmaster.cpp
+		engine/sv_web_auth.cpp
 	)
-	target_link_libraries(engine PRIVATE ${QUICHE_LIB} pthread)
+	# libcurl: web-account ticket validation POSTs to goldsrc.net over HTTPS.
+	# Dynamic system libcurl (openssl backend); the deploy target ships libcurl4
+	# + ca-certificates. Plain -lcurl so the cross-linker resolves the per-arch
+	# multiarch .so (x86_64-linux-gnu / aarch64-linux-gnu).
+	target_link_libraries(engine PRIVATE ${QUICHE_LIB} pthread curl)
 endif()
 
 if (USE_STATIC_LIBSTDC)

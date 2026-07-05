@@ -31,6 +31,7 @@
 #ifdef REHLDS_QUIC
 #include "sv_xashmaster.h"
 #include "net_webtransport.h"
+#include "sv_web_auth.h"
 #endif
 
 typedef struct full_packet_entities_s
@@ -2480,6 +2481,43 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 			}
 			host_client->network_userid.idtype = AUTH_IDTYPE_STEAM;
 			host_client->network_userid.m_SteamID = 0;
+#ifdef REHLDS_QUIC
+			// Web-account identity. A logged-in goldsrc.net player carries a
+			// one-time connect ticket in userinfo ("_gt"); redeem it against the
+			// site to turn the shared SteamID 0 into a stable per-account id.
+			// Rollout policy: a transport error or a missing/empty ticket keeps
+			// SteamID 0 (still admitted); a *banned* verdict rejects.
+			if (WT_IsClientAddr(&adr))
+			{
+				const char *gt = Info_ValueForKey(userinfo, "_gt");
+				if (gt[0])
+				{
+					qboolean gtValid = FALSE, gtBanned = FALSE;
+					uint32 gtAccount = 0;
+					if (SV_ValidateGameTicket(gt, &gtValid, &gtAccount, &gtBanned))
+					{
+						if (gtBanned)
+						{
+							SV_RejectConnection(&adr, "This account is banned from goldsrc.net.\n");
+							return;
+						}
+						if (gtValid && gtAccount != 0)
+						{
+							// Render the site account id as a normal Public/Individual
+							// SteamID64 (base 0x0110000100000000) so all SteamID-based
+							// tooling (bans, amxmodx admin) treats web players as regular
+							// players. Placed in the top, unallocated band of the 32-bit
+							// accountID space (real Steam accounts allocate from 1, ~1.5e9)
+							// to avoid colliding with a real SteamID.
+							host_client->network_userid.m_SteamID =
+								0x0110000100000000ULL + (uint64)(0xF0000000u + gtAccount);
+							Con_DPrintf("web-auth: admitted account %u as steamid %llu\n",
+								gtAccount, (unsigned long long)host_client->network_userid.m_SteamID);
+						}
+					}
+				}
+			}
+#endif
 		}
 	}
 	else
