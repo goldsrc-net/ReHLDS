@@ -521,6 +521,42 @@ static void WT_FreeClient(wt_server_conn_t *client)
 
 /*
 ==================
+WT_DropEngineClient
+
+A WebTransport connection went away - a clean CONNECTION_CLOSE from a closed
+browser tab, or the QUIC idle timeout for an abrupt close. Classic UDP has no
+connection state, so the engine only reaps silent clients via SV_CheckTimeouts
+(~sv_timeout, tens of seconds) - which leaves a browser-tab-close as a zombie
+occupying a player slot. But QUIC *is* connection-oriented, so the transport
+tells us the peer is gone now: find the matching live game client and drop it
+immediately. Call this just before WT_FreeClient at the per-frame close paths
+only (never from WT_ShutdownServer, which is tearing everything down anyway).
+==================
+*/
+static void WT_DropEngineClient(const netadr_t *addr)
+{
+	int i;
+	client_t *cl;
+
+	if (!g_psvs.clients)
+		return;
+
+	for (i = 0, cl = g_psvs.clients; i < g_psvs.maxclients; i++, cl++)
+	{
+		if (cl->fakeclient)
+			continue;
+		if (!cl->connected && !cl->active && !cl->spawned)
+			continue;
+		if (WT_CompareAdr(cl->netchan.remote_address, *addr))
+		{
+			SV_DropClient(cl, FALSE, "WebTransport connection closed");
+			return;
+		}
+	}
+}
+
+/*
+==================
 WT_QueueDatagram
 
 Queue a received datagram for later retrieval
@@ -1309,6 +1345,7 @@ void WT_ProcessIncomingPacket(const unsigned char *data, int len, const netadr_t
 	if (quiche_conn_is_closed(conn))
 	{
 		Con_DPrintf("WT: Client %s disconnected\n", NET_AdrToString(*from));
+		WT_DropEngineClient(&client->client_addr);
 		WT_FreeClient(client);
 	}
 }
@@ -1395,6 +1432,7 @@ void WT_ServerFrame()
 		if (now - wt_server.clients[i].last_activity > WT_TIMEOUT_MS)
 		{
 			Con_DPrintf("WT: Client %d timed out\n", i);
+			WT_DropEngineClient(&wt_server.clients[i].client_addr);
 			WT_FreeClient(&wt_server.clients[i]);
 			continue;
 		}

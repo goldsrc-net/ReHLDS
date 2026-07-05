@@ -2482,40 +2482,60 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 			host_client->network_userid.idtype = AUTH_IDTYPE_STEAM;
 			host_client->network_userid.m_SteamID = 0;
 #ifdef REHLDS_QUIC
-			// Web-account identity. A logged-in goldsrc.net player carries a
-			// one-time connect ticket in userinfo ("_gt"); redeem it against the
-			// site to turn the shared SteamID 0 into a stable per-account id.
-			// Rollout policy: a transport error or a missing/empty ticket keeps
-			// SteamID 0 (still admitted); a *banned* verdict rejects.
+			// Web-account identity. Browser (WebTransport) clients have no Steam
+			// context, so they carry a one-time connect ticket in userinfo ("_gt")
+			// minted by the logged-in goldsrc.net site. Policy: a WT client MUST
+			// present a valid, non-banned ticket - no ticket, a transport error, an
+			// invalid verdict, or a ban all reject. We never leave a web client at
+			// the shared SteamID 0 (which surfaces as STEAM_ID_PENDING): either it
+			// gets a stable per-account SteamID64 or it is turned away.
 			if (WT_IsClientAddr(&adr))
 			{
 				const char *gt = Info_ValueForKey(userinfo, "_gt");
-				if (gt[0])
+				qboolean gtValid = FALSE, gtBanned = FALSE;
+				uint32 gtAccount = 0;
+
+				if (!gt[0] || !SV_ValidateGameTicket(gt, &gtValid, &gtAccount, &gtBanned))
 				{
-					qboolean gtValid = FALSE, gtBanned = FALSE;
-					uint32 gtAccount = 0;
-					if (SV_ValidateGameTicket(gt, &gtValid, &gtAccount, &gtBanned))
-					{
-						if (gtBanned)
-						{
-							SV_RejectConnection(&adr, "This account is banned from goldsrc.net.\n");
-							return;
-						}
-						if (gtValid && gtAccount != 0)
-						{
-							// Render the site account id as a normal Public/Individual
-							// SteamID64 (base 0x0110000100000000) so all SteamID-based
-							// tooling (bans, amxmodx admin) treats web players as regular
-							// players. Placed in the top, unallocated band of the 32-bit
-							// accountID space (real Steam accounts allocate from 1, ~1.5e9)
-							// to avoid colliding with a real SteamID.
-							host_client->network_userid.m_SteamID =
-								0x0110000100000000ULL + (uint64)(0xF0000000u + gtAccount);
-							Con_DPrintf("web-auth: admitted account %u as steamid %llu\n",
-								gtAccount, (unsigned long long)host_client->network_userid.m_SteamID);
-						}
-					}
+					// No ticket (not logged in, or the client's async token fetch
+					// lost the connect race) or the site was unreachable. Fail closed
+					// - this also fires when GAME_SERVER_SECRET is unset on the box.
+					SV_RejectConnection(&adr, "goldsrc.net login required. Please sign in and reconnect.\n");
+					return;
 				}
+				if (gtBanned)
+				{
+					SV_RejectConnection(&adr, "This account is banned from goldsrc.net.\n");
+					return;
+				}
+				if (!gtValid || gtAccount == 0)
+				{
+					SV_RejectConnection(&adr, "goldsrc.net login required. Please sign in and reconnect.\n");
+					return;
+				}
+
+				// Render the site account id as a normal Public/Individual SteamID64
+				// (base 0x0110000100000000) so all SteamID-based tooling (bans,
+				// amxmodx admin) treats web players as regular players. Placed in the
+				// top, unallocated band of the 32-bit accountID space (real Steam
+				// accounts allocate from 1, ~1.5e9) to avoid colliding with a real
+				// SteamID.
+				host_client->network_userid.m_SteamID =
+					0x0110000100000000ULL + (uint64)(0xF0000000u + gtAccount);
+
+				// Engine-native local ban parity. The usual numeric-id ban check
+				// (SV_FilterUser in OnGSClientApprove) is on the Steam-approval path,
+				// which WT clients bypass - so run it here. This lets an operator ban
+				// a web account with the normal banid/listid tooling, independent of
+				// the site-level (banned:true) verdict above.
+				if (SV_FilterUser(&host_client->network_userid))
+				{
+					SV_RejectConnection(&adr, "You have been banned from this server.\n");
+					return;
+				}
+
+				Con_DPrintf("web-auth: admitted account %u as steamid %llu\n",
+					gtAccount, (unsigned long long)host_client->network_userid.m_SteamID);
 			}
 #endif
 		}
