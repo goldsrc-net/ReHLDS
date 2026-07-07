@@ -3189,9 +3189,11 @@ typedef struct entcount_s
 
 //entcount_t ent_datacounts[32];
 
-NOXREF void SVC_PlayerInfo(void)
+// Player roster reply (S2A_PLAYERS: name/frags/time per active client). Formerly
+// dead (Steam handles the standard A2S_PLAYER); re-wired for the WT query path via
+// the "players" connectionless command in SV_ConnectionlessPacket.
+void SVC_PlayerInfo(void)
 {
-	NOXREFCHECK;
 	int i;
 	int count = 0;
 	client_t *client;
@@ -3238,9 +3240,10 @@ NOXREF void SVC_PlayerInfo(void)
 	NET_SendPacket(NS_SERVER, buf.cursize, (char *)buf.data, net_from);
 }
 
-NOXREF void SVC_RuleInfo(void)
+// Server rules reply (S2A_RULES: FCVAR_SERVER cvars). Formerly dead (Steam handles
+// the standard A2S_RULES); re-wired for the WT query path via the "rules" command.
+void SVC_RuleInfo(void)
 {
-	NOXREFCHECK;
 	int nNumRules;
 	cvar_t *var;
 	sizebuf_t buf;
@@ -3814,6 +3817,20 @@ void SV_ConnectionlessPacket(void)
 	else if (!Q_strcmp(c, "info"))
 	{
 		XashMaster_Info();
+	}
+	// Engine-native player roster / server rules queries, answered over the WT
+	// tunnel. The standard A2S_PLAYER/A2S_RULES are Steam-intercepted and replied
+	// over UDP, which never reaches a browser; these string commands are dispatched
+	// by the engine (like "info") and NET_SendPacket back over WT. Gated to WT
+	// clients so this can't be a UDP reflection/amplification vector — a WT client
+	// has an established QUIC session and its source address can't be spoofed.
+	else if (!Q_strcmp(c, "players") && WT_IsClientAddr(&net_from))
+	{
+		SVC_PlayerInfo();
+	}
+	else if (!Q_strcmp(c, "rules") && WT_IsClientAddr(&net_from))
+	{
+		SVC_RuleInfo();
 	}
 #endif // REHLDS_QUIC
 	else if (c[0] == A2A_GETCHALLENGE || c[0] == A2S_INFO || c[0] == A2S_PLAYER || c[0] == A2S_RULES ||
