@@ -949,7 +949,20 @@ edict_t* EXT_FUNC PF_find_Shared(int eStartSearchAfter, int iFieldToMatch, const
 		if (ed->free)
 			continue;
 
-		char* t = &pr_strings[*(string_t*)((size_t)&ed->v + iFieldToMatch)];
+		string_t off = *(string_t*)((size_t)&ed->v + iFieldToMatch);
+#if INTPTR_MAX > INT32_MAX
+		// 64-bit: string_t offsets index the Ed_StrPool hunk (SV_SpawnServer anchors
+		// pr_strings to it). A third-party amd64 plugin (rcbot_mm) that computes
+		// MAKE_STRING as a raw pointer diff from its OWN .rodata writes an out-of-pool
+		// offset into edict string fields; resolving it here produced a wild pointer
+		// (observed live under gdb: pr_strings + (uint32)negative_diff = plugin rodata
+		// + 2^32 -> SIGSEGV in strcmp during the "info_player_deathmatch" respawn scan).
+		// Skip any offset outside the pool instead of strcmp'ing garbage.
+		extern sizebuf_t g_EdStringPool_Hunk;
+		if ((unsigned int)off >= (unsigned int)g_EdStringPool_Hunk.cursize)
+			continue;
+#endif
+		char* t = &pr_strings[off];
 		if (t == 0 || t == &pr_strings[0])
 			continue;
 
