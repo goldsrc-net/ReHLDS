@@ -2489,7 +2489,12 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 			// invalid verdict, or a ban all reject. We never leave a web client at
 			// the shared SteamID 0 (which surfaces as STEAM_ID_PENDING): either it
 			// gets a stable per-account SteamID64 or it is turned away.
-			if (WT_IsClientAddr(&adr))
+			// EXCEPT on a LAN server (sv_lan 1): LAN mode already skips Steam
+			// validation for every client, so web clients are admitted the same
+			// way (SteamID 0) without the goldsrc.net ticket round-trip - a local
+			// test rig has no GAME_SERVER_SECRET and would otherwise fail closed
+			// with "login required" for every browser join.
+			if (sv_lan.value == 0.0f && WT_IsClientAddr(&adr))
 			{
 				const char *gt = Info_ValueForKey(userinfo, "_gt");
 				qboolean gtValid = FALSE, gtBanned = FALSE;
