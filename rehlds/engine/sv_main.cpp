@@ -2310,6 +2310,18 @@ int SV_FindEmptySlot(netadr_t *adr, int *pslot, client_t ** ppClient)
 	return 0;
 }
 
+#ifdef REHLDS_QUIC
+// A web (goldsrc.net) account is rendered as an Individual SteamID64 in the top,
+// unallocated band of the accountID space: base 0x0110000100000000 + (0xF0000000 +
+// site_account_id). Recognise one so a map-change reconnect can reuse the identity
+// established at the initial connect (see the _gt gate in SV_ConnectClient_internal).
+static qboolean SV_IsWebAccountSteamID(uint64 id)
+{
+	return (id & 0xFFFFFFFF00000000ULL) == 0x0110000100000000ULL
+		&& (uint32)(id & 0xFFFFFFFFULL) >= 0xF0000000u;
+}
+#endif
+
 void SV_ConnectClient(void)
 {
 	g_RehldsHookchains.m_SV_ConnectClient.callChain(SV_ConnectClient_internal);
@@ -2334,6 +2346,9 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 	unsigned short port;
 	qboolean reconnect;
 	qboolean bIsSecure;
+#ifdef REHLDS_QUIC
+	uint64 prevWebSteamID = 0;	// web-account identity carried across a reconnect (map change)
+#endif
 
 	client = NULL;
 	Q_memcpy(&adr, &net_from, sizeof(adr));
@@ -2417,6 +2432,13 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 
 	if (reconnect)
 	{
+#ifdef REHLDS_QUIC
+		// Preserve the web-account SteamID established at the initial connect so a
+		// map-change reconnect (the server sends "reconnect") doesn't re-demand the
+		// one-time goldsrc.net ticket, which was already burned. Captured before
+		// Steam_NotifyClientDisconnect, which may reset network_userid.
+		prevWebSteamID = client->network_userid.m_SteamID;
+#endif
 #ifndef REHLDS_FIXES
 		Steam_NotifyClientDisconnect(client);
 #endif
@@ -2499,48 +2521,60 @@ void EXT_FUNC SV_ConnectClient_internal(void)
 				const char *gt = Info_ValueForKey(userinfo, "_gt");
 				qboolean gtValid = FALSE, gtBanned = FALSE;
 				uint32 gtAccount = 0;
+				// A fresh, non-empty ticket the site validated on this pass. A
+				// transport error or an unset GAME_SERVER_SECRET leaves this FALSE.
+				qboolean gtFresh = gt[0] && SV_ValidateGameTicket(gt, &gtValid, &gtAccount, &gtBanned);
 
-				if (!gt[0] || !SV_ValidateGameTicket(gt, &gtValid, &gtAccount, &gtBanned))
-				{
-					// No ticket (not logged in, or the client's async token fetch
-					// lost the connect race) or the site was unreachable. Fail closed
-					// - this also fires when GAME_SERVER_SECRET is unset on the box.
-					SV_RejectConnection(&adr, "goldsrc.net login required. Please sign in and reconnect.\n");
-					return;
-				}
-				if (gtBanned)
+				if (gtFresh && gtBanned)
 				{
 					SV_RejectConnection(&adr, "This account is banned from goldsrc.net.\n");
 					return;
 				}
-				if (!gtValid || gtAccount == 0)
+
+				if (gtFresh && gtValid && gtAccount != 0)
 				{
+					// Render the site account id as a normal Public/Individual SteamID64
+					// (base 0x0110000100000000) so all SteamID-based tooling (bans,
+					// amxmodx admin) treats web players as regular players. Placed in the
+					// top, unallocated band of the 32-bit accountID space (real Steam
+					// accounts allocate from 1, ~1.5e9) to avoid colliding with a real
+					// SteamID.
+					host_client->network_userid.m_SteamID =
+						0x0110000100000000ULL + (uint64)(0xF0000000u + gtAccount);
+					Con_DPrintf("web-auth: admitted account %u as steamid %llu\n",
+						gtAccount, (unsigned long long)host_client->network_userid.m_SteamID);
+				}
+				else if (reconnect && SV_IsWebAccountSteamID(prevWebSteamID))
+				{
+					// Map-change reconnect: the one-time ticket was consumed at the
+					// initial connect, so the client re-sends a now-stale (or empty) _gt.
+					// Reuse the per-account identity established then, rather than kicking
+					// the player with "login required" on every changelevel. The identity
+					// rides the persistent client slot, matched by the stable WT peer
+					// address - only the same WebTransport can reach this reconnect path.
+					host_client->network_userid.m_SteamID = prevWebSteamID;
+					Con_DPrintf("web-auth: reconnect reused steamid %llu\n",
+						(unsigned long long)prevWebSteamID);
+				}
+				else
+				{
+					// No fresh ticket and no established identity to fall back on:
+					// initial connect while logged out, the async token fetch lost the
+					// connect race, a transport error, or an invalid verdict. Fail closed.
 					SV_RejectConnection(&adr, "goldsrc.net login required. Please sign in and reconnect.\n");
 					return;
 				}
 
-				// Render the site account id as a normal Public/Individual SteamID64
-				// (base 0x0110000100000000) so all SteamID-based tooling (bans,
-				// amxmodx admin) treats web players as regular players. Placed in the
-				// top, unallocated band of the 32-bit accountID space (real Steam
-				// accounts allocate from 1, ~1.5e9) to avoid colliding with a real
-				// SteamID.
-				host_client->network_userid.m_SteamID =
-					0x0110000100000000ULL + (uint64)(0xF0000000u + gtAccount);
-
 				// Engine-native local ban parity. The usual numeric-id ban check
 				// (SV_FilterUser in OnGSClientApprove) is on the Steam-approval path,
-				// which WT clients bypass - so run it here. This lets an operator ban
-				// a web account with the normal banid/listid tooling, independent of
-				// the site-level (banned:true) verdict above.
+				// which WT clients bypass - so run it here, for both the fresh and the
+				// reused identity. This lets an operator ban a web account with the
+				// normal banid/listid tooling, independent of the site-level verdict.
 				if (SV_FilterUser(&host_client->network_userid))
 				{
 					SV_RejectConnection(&adr, "You have been banned from this server.\n");
 					return;
 				}
-
-				Con_DPrintf("web-auth: admitted account %u as steamid %llu\n",
-					gtAccount, (unsigned long long)host_client->network_userid.m_SteamID);
 			}
 #endif
 		}
